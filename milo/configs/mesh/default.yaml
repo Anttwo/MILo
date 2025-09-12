@@ -1,6 +1,9 @@
+# Mesh Rasterizer backend
+use_opengl: true  # true for OpenGL backend, false for CUDA backend
+
 # Regularization schedule
 start_iter: 8_001
-mesh_update_interval: 1 
+mesh_update_interval: 1
 stop_iter: 18000
 
 # Depth loss weight
