@@ -36,6 +36,10 @@ from utils.geometry_utils import flatten_voronoi_features
 # 而 MILo/colmap 渲染管线假设的是前方 +Z、向上 -Y。需要在读入时做一次轴翻转。
 OPENGL_TO_COLMAP = np.diag([1.0, -1.0, -1.0]).astype(np.float32)
 
+# 统一管理脚本根目录和数据目录，便于构造相对路径
+MILO_DIR = Path(__file__).resolve().parent
+DATA_ROOT = MILO_DIR / "data"
+
 
 class DepthProvider:
     """负责加载并缓存 Discoverse 深度图，统一形状、裁剪和掩码。"""
@@ -629,6 +633,215 @@ def save_heatmap(data: np.ndarray, output_path: Path, title: str) -> None:
     plt.close()
 
 
+def resolve_data_path(user_path: str) -> Path:
+    """将相对路径映射到 milo/data 下，支持用户提供绝对路径。"""
+    if not user_path:
+        raise ValueError("路径参数不能为空。")
+    path = Path(user_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (DATA_ROOT / path).resolve()
+
+
+def save_detail_visualizations(
+    iteration: int,
+    detail_dir: Path,
+    view_index: int,
+    gaussian_depth_map: np.ndarray,
+    mesh_depth_map: np.ndarray,
+    gt_depth_map: np.ndarray,
+    gaussian_normals_map: np.ndarray,
+    mesh_normals_map: np.ndarray,
+    gt_normals_map: np.ndarray,
+    gaussian_valid: np.ndarray,
+    mesh_valid: np.ndarray,
+    gt_valid: np.ndarray,
+    shared_min: float,
+    shared_max: float,
+    depth_stats: Dict[str, float],
+    normal_stats: Dict[str, float],
+    loss_summary: Dict[str, float],
+) -> None:
+    """保存更详细的调试可视化，便于逐迭代排查。"""
+    detail_dir.mkdir(parents=True, exist_ok=True)
+
+    shared_min = shared_min if np.isfinite(shared_min) else 0.0
+    shared_max = shared_max if np.isfinite(shared_max) else 1.0
+    if not np.isfinite(shared_max) or shared_max <= shared_min:
+        shared_max = shared_min + 1.0
+
+    gaussian_mask = gaussian_valid & gt_valid
+    mesh_mask = mesh_valid & gt_valid
+
+    gaussian_depth_diff = np.full(gaussian_depth_map.shape, np.nan, dtype=np.float32)
+    mesh_depth_diff = np.full(mesh_depth_map.shape, np.nan, dtype=np.float32)
+    if gaussian_mask.any():
+        gaussian_depth_diff[gaussian_mask] = np.abs(
+            gaussian_depth_map[gaussian_mask] - gt_depth_map[gaussian_mask]
+        )
+    if mesh_mask.any():
+        mesh_depth_diff[mesh_mask] = np.abs(mesh_depth_map[mesh_mask] - gt_depth_map[mesh_mask])
+
+    diff_values: List[np.ndarray] = []
+    if gaussian_mask.any():
+        diff_values.append(gaussian_depth_diff[gaussian_mask].reshape(-1))
+    if mesh_mask.any():
+        diff_values.append(mesh_depth_diff[mesh_mask].reshape(-1))
+    if diff_values:
+        diff_stack = np.concatenate(diff_values)
+        diff_vmax = float(np.percentile(diff_stack, 99.0))
+        if (not np.isfinite(diff_vmax)) or diff_vmax <= 0.0:
+            diff_vmax = 1.0
+    else:
+        diff_vmax = 1.0
+
+    depth_fig, depth_axes = plt.subplots(2, 3, figsize=(18, 10), dpi=300)
+    ax_gt_depth, ax_gaussian_depth, ax_mesh_depth = depth_axes[0]
+    ax_gaussian_diff, ax_mesh_diff, ax_depth_hist = depth_axes[1]
+
+    im_gt = ax_gt_depth.imshow(gt_depth_map, cmap="viridis", vmin=shared_min, vmax=shared_max)
+    ax_gt_depth.set_title("GT depth")
+    ax_gt_depth.axis("off")
+    depth_fig.colorbar(im_gt, ax=ax_gt_depth, fraction=0.046, pad=0.04)
+
+    im_gaussian = ax_gaussian_depth.imshow(
+        gaussian_depth_map,
+        cmap="viridis",
+        vmin=shared_min,
+        vmax=shared_max,
+    )
+    ax_gaussian_depth.set_title("Gaussian depth")
+    ax_gaussian_depth.axis("off")
+    depth_fig.colorbar(im_gaussian, ax=ax_gaussian_depth, fraction=0.046, pad=0.04)
+
+    im_mesh = ax_mesh_depth.imshow(
+        mesh_depth_map,
+        cmap="viridis",
+        vmin=shared_min,
+        vmax=shared_max,
+    )
+    ax_mesh_depth.set_title("Mesh depth")
+    ax_mesh_depth.axis("off")
+    depth_fig.colorbar(im_mesh, ax=ax_mesh_depth, fraction=0.046, pad=0.04)
+
+    gaussian_diff_masked = np.ma.array(gaussian_depth_diff, mask=~gaussian_mask)
+    mesh_diff_masked = np.ma.array(mesh_depth_diff, mask=~mesh_mask)
+    ax_gaussian_diff.imshow(gaussian_diff_masked, cmap="magma", vmin=0.0, vmax=diff_vmax)
+    ax_gaussian_diff.set_title("|Gaussian - GT|")
+    ax_gaussian_diff.axis("off")
+    ax_mesh_diff.imshow(mesh_diff_masked, cmap="magma", vmin=0.0, vmax=diff_vmax)
+    ax_mesh_diff.set_title("|Mesh - GT|")
+    ax_mesh_diff.axis("off")
+
+    ax_depth_hist.set_title("Depth diff histogram")
+    ax_depth_hist.set_xlabel("Absolute difference")
+    ax_depth_hist.set_ylabel("Count")
+    if diff_values:
+        if gaussian_mask.any():
+            ax_depth_hist.hist(
+                gaussian_depth_diff[gaussian_mask].reshape(-1),
+                bins=60,
+                alpha=0.6,
+                label="Gaussian",
+            )
+        if mesh_mask.any():
+            ax_depth_hist.hist(
+                mesh_depth_diff[mesh_mask].reshape(-1),
+                bins=60,
+                alpha=0.6,
+                label="Mesh",
+            )
+        ax_depth_hist.legend()
+    else:
+        ax_depth_hist.text(0.5, 0.5, "No valid depth diffs", ha="center", va="center")
+    depth_fig.suptitle(
+        f"Iter {iteration:04d} view {view_index} | depth_loss={loss_summary['depth_loss']:.4f}"
+        f" | normal_loss={loss_summary['normal_loss']:.4f} | mesh_loss={loss_summary['mesh_loss']:.4f}",
+        fontsize=12,
+    )
+    depth_fig.tight_layout(rect=[0, 0, 1, 0.95])
+    depth_fig.savefig(detail_dir / f"detail_depth_iter_{iteration:04d}.png", dpi=300)
+    plt.close(depth_fig)
+
+    gaussian_normals_rgb = normals_to_rgb(gaussian_normals_map)
+    mesh_normals_rgb = normals_to_rgb(mesh_normals_map)
+    gt_normals_rgb = normals_to_rgb(gt_normals_map)
+
+    gaussian_normal_mask = np.all(np.isfinite(gaussian_normals_map), axis=-1) & np.all(
+        np.isfinite(gt_normals_map), axis=-1
+    )
+    mesh_normal_mask = np.all(np.isfinite(mesh_normals_map), axis=-1) & np.all(
+        np.isfinite(gt_normals_map), axis=-1
+    )
+    gaussian_normal_diff = np.linalg.norm(gaussian_normals_map - gt_normals_map, axis=-1)
+    mesh_normal_diff = np.linalg.norm(mesh_normals_map - gt_normals_map, axis=-1)
+    gaussian_normal_diff = np.where(gaussian_normal_mask, gaussian_normal_diff, np.nan)
+    mesh_normal_diff = np.where(mesh_normal_mask, mesh_normal_diff, np.nan)
+
+    normal_diff_values: List[np.ndarray] = []
+    if gaussian_normal_mask.any():
+        normal_diff_values.append(gaussian_normal_diff[gaussian_normal_mask].reshape(-1))
+    if mesh_normal_mask.any():
+        normal_diff_values.append(mesh_normal_diff[mesh_normal_mask].reshape(-1))
+    if normal_diff_values:
+        normal_diff_stack = np.concatenate(normal_diff_values)
+        normal_vmax = float(np.percentile(normal_diff_stack, 99.0))
+        if (not np.isfinite(normal_vmax)) or normal_vmax <= 0.0:
+            normal_vmax = 1.0
+    else:
+        normal_vmax = 1.0
+
+    normal_fig, normal_axes = plt.subplots(2, 3, figsize=(18, 10), dpi=300)
+    ax_gt_normals, ax_gaussian_normals, ax_mesh_normals = normal_axes[0]
+    ax_gaussian_normal_diff, ax_mesh_normal_diff, ax_normal_text = normal_axes[1]
+
+    ax_gt_normals.imshow(gt_normals_rgb)
+    ax_gt_normals.set_title("GT normals")
+    ax_gt_normals.axis("off")
+    ax_gaussian_normals.imshow(gaussian_normals_rgb)
+    ax_gaussian_normals.set_title("Gaussian normals")
+    ax_gaussian_normals.axis("off")
+    ax_mesh_normals.imshow(mesh_normals_rgb)
+    ax_mesh_normals.set_title("Mesh normals")
+    ax_mesh_normals.axis("off")
+
+    gaussian_normals_masked = np.ma.array(gaussian_normal_diff, mask=~gaussian_normal_mask)
+    mesh_normals_masked = np.ma.array(mesh_normal_diff, mask=~mesh_normal_mask)
+    im_gaussian_normal = ax_gaussian_normal_diff.imshow(
+        gaussian_normals_masked,
+        cmap="magma",
+        vmin=0.0,
+        vmax=normal_vmax,
+    )
+    ax_gaussian_normal_diff.set_title("‖Gaussian-GT‖")
+    ax_gaussian_normal_diff.axis("off")
+    normal_fig.colorbar(im_gaussian_normal, ax=ax_gaussian_normal_diff, fraction=0.046, pad=0.04)
+
+    im_mesh_normal = ax_mesh_normal_diff.imshow(
+        mesh_normals_masked,
+        cmap="magma",
+        vmin=0.0,
+        vmax=normal_vmax,
+    )
+    ax_mesh_normal_diff.set_title("‖Mesh-GT‖")
+    ax_mesh_normal_diff.axis("off")
+    normal_fig.colorbar(im_mesh_normal, ax=ax_mesh_normal_diff, fraction=0.046, pad=0.04)
+
+    ax_normal_text.axis("off")
+    text_lines = [
+        f"Iter {iteration:04d} view {view_index}",
+        f"Loss: total={loss_summary['loss']:.4f} depth={loss_summary['depth_loss']:.4f} normal={loss_summary['normal_loss']:.4f}",
+        f"Mesh loss={loss_summary['mesh_loss']:.4f} (depth={loss_summary['mesh_depth_loss']:.4f}, normal={loss_summary['mesh_normal_loss']:.4f})",
+        f"Occupancy: centers={loss_summary['occupied_loss']:.4f} labels={loss_summary['labels_loss']:.4f}",
+        f"Depth metrics: mae={depth_stats['mae']:.4f} rmse={depth_stats['rmse']:.4f}",
+        f"Normal metrics: valid_px={normal_stats['valid_px']:.0f} cos={normal_stats['mean_cos']:.4f}",
+        f"Grad norm={loss_summary['grad_norm']:.4f}",
+    ]
+    ax_normal_text.text(0.0, 1.0, "\n".join(text_lines), va="top")
+    normal_fig.tight_layout()
+    normal_fig.savefig(detail_dir / f"detail_normals_iter_{iteration:04d}.png", dpi=300)
+    plt.close(normal_fig)
+
 def main():
     parser = ArgumentParser(description="桥梁场景高斯到网格迭代分析脚本")
     parser.add_argument(
@@ -706,6 +919,12 @@ def main():
         help="保存可视化/npz 的间隔，默认与 Delaunay 重建间隔相同",
     )
     parser.add_argument(
+        "--detail_interval",
+        type=int,
+        default=None,
+        help="详细调试图像保存间隔（单位：迭代，未设置则禁用）",
+    )
+    parser.add_argument(
         "--heatmap_dir",
         type=str,
         default="yufu2mesh_outputs",
@@ -714,8 +933,20 @@ def main():
     parser.add_argument(
         "--depth_gt_dir",
         type=str,
-        default="/home/zoyo/Desktop/MILo_rtx50/milo/data/bridge_clean/depth",
-        help="Discoverse 深度 npy 所在目录",
+        default="bridge_clean/depth",
+        help="Discoverse 深度 npy 相对路径（根目录为 milo/data，亦可填绝对路径）",
+    )
+    parser.add_argument(
+        "--ply_path",
+        type=str,
+        default="bridge_clean/yufu_bridge_cleaned.ply",
+        help="初始高斯 PLY 路径（相对于 milo/data，可填绝对路径）",
+    )
+    parser.add_argument(
+        "--camera_poses_json",
+        type=str,
+        default="bridge_clean/camera_poses_cam1.json",
+        help="相机位姿 JSON 路径（相对于 milo/data，可填绝对路径）",
     )
     parser.add_argument(
         "--normal_cache_dir",
@@ -795,7 +1026,7 @@ def main():
     pipe.debug = getattr(args, "debug", False)
 
     # 所有输出固定写入 milo/runs/ 下，便于管理实验产物
-    base_run_dir = Path(__file__).resolve().parent / "runs"
+    base_run_dir = MILO_DIR / "runs"
     output_dir = base_run_dir / args.heatmap_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     iteration_image_dir = output_dir / "iteration_images"
@@ -805,17 +1036,32 @@ def main():
         lock_view_output_dir = output_dir / "lock_view_repeat"
         lock_view_output_dir.mkdir(parents=True, exist_ok=True)
 
+    detail_interval: Optional[int] = None
+    detail_image_dir: Optional[Path] = None
+    if args.detail_interval is not None:
+        if args.detail_interval <= 0:
+            print("[WARNING] --detail_interval <= 0，已禁用详细调试输出。")
+        else:
+            detail_interval = max(1, args.detail_interval)
+            detail_image_dir = output_dir / "detail_images"
+            detail_image_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[INFO] 启用详细调试输出：每 {detail_interval} 次迭代写入 detail_images。")
+
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    ply_path = "/home/zoyo/Desktop/MILo_rtx50/milo/data/bridge_clean/yufu_bridge_cleaned.ply"
-    camera_poses_json = "/home/zoyo/Desktop/MILo_rtx50/milo/data/bridge_clean/camera_poses_cam1.json"
+    depth_gt_dir = resolve_data_path(args.depth_gt_dir)
+    ply_path = resolve_data_path(args.ply_path)
+    camera_poses_json = resolve_data_path(args.camera_poses_json)
+    print(
+        f"[INFO] 使用数据路径：depth_gt={depth_gt_dir}, ply={ply_path}, camera_json={camera_poses_json}"
+    )
 
     gaussians = GaussianModel(sh_degree=0, learn_occupancy=True)
-    gaussians.load_ply(ply_path)
+    gaussians.load_ply(str(ply_path))
 
     # ========== 使用新的优化配置设置参数 ==========
     print("[INFO] 配置高斯参数优化...")
@@ -826,7 +1072,7 @@ def main():
     fov_y_deg = 75.0
 
     train_cameras = load_cameras_from_json(
-        json_path=camera_poses_json,
+        json_path=str(camera_poses_json),
         image_height=height,
         image_width=width,
         fov_y_deg=fov_y_deg,
@@ -878,7 +1124,7 @@ def main():
     print(f"[INFO] 深度裁剪范围: min={depth_clip_min}, max={depth_clip_max}")
 
     depth_provider = DepthProvider(
-        depth_root=Path(args.depth_gt_dir),
+        depth_root=depth_gt_dir,
         image_height=height,
         image_width=width,
         device=device,
@@ -1110,7 +1356,12 @@ def main():
             )
 
         should_save = (save_interval <= 0) or (iteration % save_interval == 0)
-        if should_save:
+        should_save_detail = (
+            detail_interval is not None and (iteration % detail_interval == 0)
+        )
+        shared_min: Optional[float] = None
+        shared_max: Optional[float] = None
+        if should_save or should_save_detail:
             valid_values: List[np.ndarray] = []
             if mesh_valid.any():
                 valid_values.append(mesh_depth_map[mesh_valid].reshape(-1))
@@ -1123,6 +1374,22 @@ def main():
                 shared_min = float(all_valid.min())
                 shared_max = float(all_valid.max())
             else:
+                shared_min, shared_max = 0.0, 1.0
+
+        loss_summary = {
+            "depth_loss": depth_loss_value,
+            "normal_loss": normal_loss_value,
+            "mesh_loss": mesh_loss_value,
+            "mesh_depth_loss": mesh_depth_loss,
+            "mesh_normal_loss": mesh_normal_loss,
+            "occupied_loss": occupied_loss,
+            "labels_loss": labels_loss,
+            "loss": loss_value,
+            "grad_norm": grad_norm,
+        }
+
+        if should_save:
+            if shared_min is None or shared_max is None:
                 shared_min, shared_max = 0.0, 1.0
 
             gaussian_depth_vis_path = iteration_image_dir / f"gaussian_depth_vis_iter_{iteration:02d}.png"
@@ -1266,6 +1533,27 @@ def main():
                         "[INFO] Mesh 正则尚未启动或尚未生成 Delaunay，已跳过网格导出以避免全量三角化。"
                     )
                     mesh_export_warned = True
+
+        if should_save_detail and detail_image_dir is not None:
+            save_detail_visualizations(
+                iteration=iteration,
+                detail_dir=detail_image_dir,
+                view_index=view_index,
+                gaussian_depth_map=gaussian_depth_map,
+                mesh_depth_map=mesh_depth_map,
+                gt_depth_map=gt_depth_map,
+                gaussian_normals_map=gaussian_normals_map,
+                mesh_normals_map=mesh_normals_map,
+                gt_normals_map=gt_normals_map,
+                gaussian_valid=gaussian_valid,
+                mesh_valid=mesh_valid,
+                gt_valid=gt_valid,
+                shared_min=shared_min if shared_min is not None else 0.0,
+                shared_max=shared_max if shared_max is not None else 1.0,
+                depth_stats=depth_stats,
+                normal_stats=normal_stats,
+                loss_summary=loss_summary,
+            )
 
         if lock_view_mode and lock_view_output_dir is not None:
             if view_index in previous_depth:
