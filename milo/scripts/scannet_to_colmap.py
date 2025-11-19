@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,11 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 from plyfile import PlyData
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 
 @dataclass
@@ -276,6 +282,30 @@ def write_points3d_bin(path: Path, xyz: np.ndarray, rgb: np.ndarray) -> None:
             fh.write(struct.pack("<Q", 0))  # track length
 
 
+def resize_color_bytes(
+    jpeg_bytes: bytes,
+    target_size: Tuple[int, int],
+    quality: int,
+    filter_name: str,
+) -> bytes:
+    if Image is None:
+        raise RuntimeError("Pillow 未安装，无法使用 --resize-width/--resize-height。请先 pip install pillow。")
+    width, height = target_size
+    resample_map = {
+        "nearest": Image.NEAREST,
+        "bilinear": Image.BILINEAR,
+        "bicubic": Image.BICUBIC,
+        "lanczos": Image.LANCZOS,
+    }
+    resample = resample_map[filter_name]
+    with Image.open(io.BytesIO(jpeg_bytes)) as img:
+        img = img.convert("RGB")
+        resized = img.resize((width, height), resample=resample)
+        buffer = io.BytesIO()
+        resized.save(buffer, format="JPEG", quality=quality)
+        return buffer.getvalue()
+
+
 def convert_scene(args: argparse.Namespace) -> None:
     if args.frame_step <= 0:
         raise ValueError("frame-step 必须为正整数")
@@ -283,6 +313,15 @@ def convert_scene(args: argparse.Namespace) -> None:
         raise ValueError("start-frame 不能为负")
     if args.points_stride <= 0:
         raise ValueError("points-stride 必须为正整数")
+    resize_dims: Optional[Tuple[int, int]] = None
+    if args.resize_width is not None or args.resize_height is not None:
+        if args.resize_width is None or args.resize_height is None:
+            raise ValueError("--resize-width/--resize-height 需要同时指定")
+        if args.resize_width <= 0 or args.resize_height <= 0:
+            raise ValueError("resize 尺寸必须为正整数")
+        if not 1 <= args.resize_jpeg_quality <= 100:
+            raise ValueError("resize-jpeg-quality 需在 [1, 100]")
+        resize_dims = (args.resize_width, args.resize_height)
 
     scene_root = Path(args.scene_root).resolve()
     scene_id = args.scene_id or infer_scene_id(scene_root)
@@ -332,8 +371,18 @@ def convert_scene(args: argparse.Namespace) -> None:
             qvec = rotmat_to_qvec(rot)
             image_name = f"frame_{frame.index:06d}.jpg"
             image_path = images_dir / image_name
-            with image_path.open("wb") as im_fh:
-                im_fh.write(frame.color_bytes)
+            if resize_dims is None:
+                with image_path.open("wb") as im_fh:
+                    im_fh.write(frame.color_bytes)
+            else:
+                resized_bytes = resize_color_bytes(
+                    frame.color_bytes,
+                    resize_dims,
+                    args.resize_jpeg_quality,
+                    args.resize_filter,
+                )
+                with image_path.open("wb") as im_fh:
+                    im_fh.write(resized_bytes)
 
             selected.append(
                 ImageRecord(
@@ -383,6 +432,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--points-stride", type=int, default=1, help="点云下采样步长（1 表示保留全部）。")
     parser.add_argument("--points-max", type=int, help="点云最多保留多少点。")
     parser.add_argument("--points-seed", type=int, default=0, help="点云随机采样用的随机种子。")
+    parser.add_argument("--resize-width", type=int, help="可选，将 RGB 输出缩放到指定宽度（像素）。需要安装 pillow。")
+    parser.add_argument("--resize-height", type=int, help="可选，将 RGB 输出缩放到指定高度（像素）。")
+    parser.add_argument(
+        "--resize-filter",
+        choices=["nearest", "bilinear", "bicubic", "lanczos"],
+        default="lanczos",
+        help="可选缩放滤波器（默认 lanczos）。",
+    )
+    parser.add_argument(
+        "--resize-jpeg-quality",
+        type=int,
+        default=95,
+        help="缩放后重新写入 JPEG 时的质量系数（1-100，默认 95）。",
+    )
     return parser
 
 
