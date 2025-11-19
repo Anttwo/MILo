@@ -933,19 +933,19 @@ def main():
     parser.add_argument(
         "--depth_gt_dir",
         type=str,
-        default="bridge_clean/depth",
+        default="bridge_small/depth",
         help="Discoverse 深度 npy 相对路径（根目录为 milo/data，亦可填绝对路径）",
     )
     parser.add_argument(
         "--ply_path",
         type=str,
-        default="bridge_clean/yufu_bridge_cleaned.ply",
+        default="bridge_small/yufu_bridge_small.ply",
         help="初始高斯 PLY 路径（相对于 milo/data，可填绝对路径）",
     )
     parser.add_argument(
         "--camera_poses_json",
         type=str,
-        default="bridge_clean/camera_poses_cam1.json",
+        default="bridge_small/camera_poses_cam1.json",
         help="相机位姿 JSON 路径（相对于 milo/data，可填绝对路径）",
     )
     parser.add_argument(
