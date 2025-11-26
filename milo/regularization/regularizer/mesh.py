@@ -79,6 +79,7 @@ def initialize_mesh_regularization(
         "surface_sample_export_path": None,
         "surface_sample_saved": False,
         "surface_sample_saved_iter": None,
+        "latest_mesh": None,
     }
 
     return mesh_renderer, mesh_state
@@ -478,6 +479,7 @@ def compute_mesh_regularization(
         mesh_triangles = mesh.faces
         if mesh_triangles.numel() == 0:
             mesh_state["mesh_triangles"] = mesh_triangles
+            mesh_state["latest_mesh"] = None
             return {
                 "mesh_loss": torch.zeros((), device=gaussians._xyz.device),
                 "mesh_depth_loss": torch.zeros((), device=gaussians._xyz.device),
@@ -494,6 +496,12 @@ def compute_mesh_regularization(
             }
 
         mesh_state["mesh_triangles"] = mesh_triangles
+        # Cache the current mesh for logging (detached to avoid graph retention)
+        mesh_state["latest_mesh"] = Meshes(
+            verts=mesh.verts.detach(),
+            faces=mesh.faces.detach(),
+            verts_colors=mesh.verts_colors.detach() if mesh.verts_colors is not None else None,
+        )
 
         mesh_render_pkg = mesh_renderer(
             mesh,
@@ -662,4 +670,5 @@ def reset_mesh_state_at_next_iteration(mesh_state):
     mesh_state["reset_delaunay_samples"] = True
     mesh_state["reset_sdf_values"] = True
     mesh_state["delaunay_tets"] = None
+    mesh_state["latest_mesh"] = None
     return mesh_state

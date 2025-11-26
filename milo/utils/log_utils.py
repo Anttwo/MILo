@@ -1,5 +1,5 @@
 import os
-from typing import List, Union, Dict, Any
+from typing import List, Union, Dict, Any, Optional
 import torch
 import numpy as np
 import math
@@ -117,6 +117,22 @@ def make_log_figure(
         return log_images_dict
 
 
+def save_inter_figure(depth_diff: torch.Tensor, normal_diff: torch.Tensor, save_path: str):
+    plt.figure(figsize=(12, 6))
+    plt.suptitle("inter")
+    plt.subplot(1, 2, 1)
+    plt.imshow(depth_diff.cpu(), cmap="Spectral")
+    plt.title("depth")
+    plt.colorbar()
+    plt.subplot(1, 2, 2)
+    plt.imshow(normal_diff.cpu(), cmap="Spectral", vmin=0.0, vmax=2.0)
+    plt.title("normal")
+    plt.colorbar()
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(save_path)
+    plt.close()
+
+
 def training_report(iteration, l1_loss, testing_iterations, scene, renderFunc, renderArgs):
     # Report test and samples of training set
     if iteration in testing_iterations:
@@ -179,6 +195,11 @@ def log_training_progress(
     ema_depth_order_loss_for_log:float,
     # Additional arguments
     testing_iterations:List[int], saving_iterations:List[int], render_imp,
+    pose_subset:Optional[List[int]]=None,
+    pose_log_dir:Optional[str]=None,
+    mesh_state:Optional[Dict[str, Any]]=None,
+    mesh_renderer=None,
+    render_func=None,
 ):
     WANDB_FOUND = run is not None
     
@@ -305,6 +326,61 @@ def log_training_progress(
                     wandb_img_to_log, caption=log_img_name
                 )
             run.log(wandb_log_images_dict, step=iteration)
+
+        if (
+            mesh_kick_on
+            and pose_subset
+            and (pose_log_dir is not None)
+            and (mesh_renderer is not None)
+            and (mesh_state is not None)
+            and (render_func is not None)
+        ):
+            current_mesh = mesh_state.get("latest_mesh", None) if isinstance(mesh_state, dict) else None
+            if current_mesh is not None:
+                pose_iter_dir = os.path.join(pose_log_dir, f"iter_{iteration}")
+                os.makedirs(pose_iter_dir, exist_ok=True)
+                train_cameras_fullres = scene.getTrainCameras().copy()
+                for pose_id in pose_subset:
+                    if (pose_id < 0) or (pose_id >= len(train_cameras_fullres)):
+                        continue
+                    pose_cam = train_cameras_fullres[pose_id]
+                    gauss_pkg_pose = render_func(
+                        pose_cam, gaussians, pipe, background,
+                        require_coord=False, require_depth=True,
+                    )
+                    gauss_depth_map = gauss_pkg_pose.get("median_depth", gauss_pkg_pose.get("expected_depth"))
+                    gauss_normal_map = gauss_pkg_pose.get("normal")
+                    if (gauss_depth_map is None) or (gauss_normal_map is None):
+                        continue
+                    mesh_pkg_pose = mesh_renderer(
+                        current_mesh,
+                        cam_idx=pose_id,
+                        return_depth=True,
+                        return_normals=True,
+                        use_antialiasing=True,
+                    )
+                    mesh_depth_map = mesh_pkg_pose.get("depth")
+                    mesh_normals_world = mesh_pkg_pose.get("normals")
+                    if (mesh_depth_map is None) or (mesh_normals_world is None):
+                        continue
+
+                    gauss_depth_map = gauss_depth_map.detach().squeeze()
+                    mesh_depth_map = mesh_depth_map.detach().squeeze()
+                    mesh_normals_view = mesh_normals_world.detach().squeeze() @ pose_cam.world_view_transform[:3,:3]
+                    mesh_normals_view = mesh_normals_view.permute(2, 0, 1)
+
+                    mesh_normals_view = fix_normal_map(pose_cam, mesh_normals_view, normal_in_view_space=True)
+                    gauss_normals_view = fix_normal_map(pose_cam, gauss_normal_map.detach(), normal_in_view_space=True)
+
+                    valid_depth_mask = (mesh_depth_map > 0) & (gauss_depth_map > 0)
+                    depth_diff = torch.zeros_like(mesh_depth_map)
+                    depth_diff[valid_depth_mask] = (mesh_depth_map - gauss_depth_map).abs()[valid_depth_mask]
+
+                    normal_dot = (gauss_normals_view * mesh_normals_view).sum(dim=0).clamp(-1., 1.)
+                    normal_diff = (1. - normal_dot) * valid_depth_mask.float()
+
+                    pose_save_path = os.path.join(pose_iter_dir, f"pose_{pose_id}.png")
+                    save_inter_figure(depth_diff, normal_diff, pose_save_path)
 
     # ---Report---
     training_report(iteration, l1_loss, testing_iterations, scene, render_imp, (pipe, background))
