@@ -213,3 +213,6 @@ learnableearthparser/fast_sampler/_sampler.c
 /.idea/misc.xml
 /.idea/modules.xml
 /.idea/vcs.xml
+milo/data/*
+!milo/data/.gitkeep
+/milo/runs/*

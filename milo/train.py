@@ -68,31 +68,6 @@ def training(
         use_appearance_network=args.decoupled_appearance,
     )
     scene = Scene(dataset, gaussians, resolution_scales=[1,2])
-    pose_subset = []
-    pose_log_dir = None
-    if (log_interval is not None) and (args.pose_count > 0):
-        pose_subset_path = os.path.join(dataset.model_path, "pose_subset.json")
-        train_cameras_fullres = scene.getTrainCameras()
-        n_cameras = len(train_cameras_fullres)
-        n_select = min(args.pose_count, n_cameras)
-        if os.path.exists(pose_subset_path):
-            try:
-                with open(pose_subset_path, "r") as f:
-                    loaded_pose_cfg = json.load(f)
-                pose_subset = [int(pid) for pid in loaded_pose_cfg.get("pose_ids", [])]
-                if len(pose_subset) != n_select:
-                    print(f"[INFO] pose_subset.json found but length {len(pose_subset)} != requested {n_select}, resampling.")
-                    raise ValueError("pose subset mismatch")
-            except Exception:
-                pose_subset = random.sample(list(range(n_cameras)), n_select)
-        else:
-            pose_subset = random.sample(list(range(n_cameras)), n_select)
-        pose_subset = pose_subset[:n_select]
-        pose_log_dir = os.path.join(dataset.model_path, "pose_inter")
-        os.makedirs(pose_log_dir, exist_ok=True)
-        with open(pose_subset_path, "w") as f:
-            json.dump({"pose_ids": pose_subset}, f, indent=2)
-        print(f"[INFO] Pose subset for interval logging ({n_select} views): {pose_subset}")
     gaussians.training_setup(opt)
     print(f"[INFO] Using 3D Mip Filter: {gaussians.use_mip_filter}")
     print(f"[INFO] Using learnable SDF: {gaussians.learn_occupancy}")
@@ -367,11 +342,6 @@ def training(
                 postfix_dict, ema_loss_for_log, ema_depth_normal_loss_for_log, ema_mesh_depth_loss_for_log, 
                 ema_mesh_normal_loss_for_log, ema_occupied_centers_loss_for_log, ema_occupancy_labels_loss_for_log,
                 ema_depth_order_loss_for_log, testing_iterations, saving_iterations, render_imp,
-                pose_subset=pose_subset,
-                pose_log_dir=pose_log_dir,
-                mesh_state=mesh_state if mesh_kick_on else None,
-                mesh_renderer=mesh_renderer if mesh_kick_on else None,
-                render_func=render if (mesh_kick_on or reg_kick_on or depth_order_kick_on) else None,
             )
 
             # ---Densification---
@@ -619,7 +589,6 @@ if __name__ == "__main__":
     parser.add_argument("--log_interval", type=int, default=None)
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_entity", type=str, default=None)
-    parser.add_argument("--pose_count", type=int, default=0)
     
     args = parser.parse_args(sys.argv[1:])
 
