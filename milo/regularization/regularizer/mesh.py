@@ -76,6 +76,10 @@ def initialize_mesh_regularization(
         "surface_delaunay_xyz_idx": None,
         "reset_delaunay_samples": True,
         "reset_sdf_values": True,
+        "surface_sample_export_path": None,
+        "surface_sample_saved": False,
+        "surface_sample_saved_iter": None,
+        "latest_mesh": None,
     }
 
     return mesh_renderer, mesh_state
@@ -242,6 +246,7 @@ def compute_mesh_regularization(
 
                 if downsample_gaussians_for_delaunay:
                     print(f"[INFO] Downsampling Delaunay Gaussians from {n_gaussians_to_sample_from} to {n_max_gaussians_for_delaunay}.")                        
+                    surface_indices_for_export = None
                     if config["delaunay_sampling_method"] == "random":
                         delaunay_xyz_idx = torch.randperm(
                             n_gaussians_to_sample_from, device="cuda"
@@ -257,6 +262,7 @@ def compute_mesh_regularization(
                             n_samples=n_max_gaussians_for_delaunay,
                             sampling_mask=delaunay_sampling_radius_mask,
                         )
+                        surface_indices_for_export = delaunay_xyz_idx
                     elif config["delaunay_sampling_method"] == "surface+opacity":
                         delaunay_xyz_idx = gaussians.sample_surface_gaussians(
                             scene=scene,
@@ -268,9 +274,10 @@ def compute_mesh_regularization(
                             n_samples=n_max_gaussians_for_delaunay,
                             sampling_mask=delaunay_sampling_radius_mask,
                         )
+                        surface_indices_for_export = delaunay_xyz_idx.clone()
                         n_remaining_gaussians_to_sample = n_max_gaussians_for_delaunay - delaunay_xyz_idx.shape[0]
                         if n_remaining_gaussians_to_sample > 0:
-                            mesh_state["surface_delaunay_xyz_idx"] = delaunay_xyz_idx.clone()
+                            mesh_state["surface_delaunay_xyz_idx"] = surface_indices_for_export.clone()
                             opacity_sample_mask = torch.ones(gaussians._xyz.shape[0], device="cuda", dtype=torch.bool)
                             opacity_sample_mask[delaunay_xyz_idx] = False
                             delaunay_xyz_idx = torch.cat(
@@ -286,6 +293,19 @@ def compute_mesh_regularization(
                             delaunay_xyz_idx = torch.sort(delaunay_xyz_idx, dim=0)[0]
                     else:
                         raise ValueError(f"Invalid Delaunay sampling method: {config['delaunay_sampling_method']}")
+
+                    if (
+                        surface_indices_for_export is not None
+                        and surface_indices_for_export.numel() > 0
+                        and mesh_state.get("surface_sample_export_path")
+                        and not mesh_state.get("surface_sample_saved", False)
+                    ):
+                        export_path = mesh_state["surface_sample_export_path"]
+                        gaussians.save_subset_ply(export_path, surface_indices_for_export)
+                        mesh_state["surface_sample_saved"] = True
+                        mesh_state["surface_sample_saved_iter"] = iteration
+                        print(f"[INFO] Exported initial surface Gaussians ({surface_indices_for_export.numel()} points) to {export_path}.")
+
                     print(f"[INFO] Downsampled Delaunay Gaussians from {n_gaussians_to_sample_from} to {len(delaunay_xyz_idx)}.")
                     reset_occupancy_labels_for_new_delaunay_sites = True
                 else:
@@ -456,6 +476,32 @@ def compute_mesh_regularization(
 
         # --- Build and Render Mesh ---
         mesh = Meshes(verts=verts, faces=faces[faces_mask])
+        mesh_triangles = mesh.faces
+        if mesh_triangles.numel() == 0:
+            mesh_state["mesh_triangles"] = mesh_triangles
+            mesh_state["latest_mesh"] = None
+            return {
+                "mesh_loss": torch.zeros((), device=gaussians._xyz.device),
+                "mesh_depth_loss": torch.zeros((), device=gaussians._xyz.device),
+                "mesh_normal_loss": torch.zeros((), device=gaussians._xyz.device),
+                "occupied_centers_loss": torch.zeros((), device=gaussians._xyz.device),
+                "occupancy_labels_loss": torch.zeros((), device=gaussians._xyz.device),
+                "updated_state": mesh_state,
+                "mesh_render_pkg": {
+                    "depth": torch.zeros_like(render_pkg.get("median_depth", torch.zeros(1, device=gaussians._xyz.device))),
+                    "normals": torch.zeros_like(render_pkg.get("normal", torch.zeros_like(render_pkg.get("render", torch.zeros(gaussians._xyz.shape[0], device=gaussians._xyz.device)))))
+                },
+                "voronoi_points_count": voronoi_points_count,
+                "mesh_triangles": mesh_triangles,
+            }
+
+        mesh_state["mesh_triangles"] = mesh_triangles
+        # Cache the current mesh for logging (detached to avoid graph retention)
+        mesh_state["latest_mesh"] = Meshes(
+            verts=mesh.verts.detach(),
+            faces=mesh.faces.detach(),
+            verts_colors=mesh.verts_colors.detach() if mesh.verts_colors is not None else None,
+        )
 
         mesh_render_pkg = mesh_renderer(
             mesh,
@@ -489,7 +535,7 @@ def compute_mesh_regularization(
             voronoi_occupancy_labels, _ = evaluate_mesh_occupancy(
                 points=voronoi_points,
                 views=scene.getTrainCameras().copy(),
-                mesh=Meshes(verts=verts, faces=faces),
+                mesh=mesh,
                 masks=None,
                 return_colors=True,
                 use_scalable_renderer=config["use_scalable_renderer"],
@@ -624,4 +670,5 @@ def reset_mesh_state_at_next_iteration(mesh_state):
     mesh_state["reset_delaunay_samples"] = True
     mesh_state["reset_sdf_values"] = True
     mesh_state["delaunay_tets"] = None
+    mesh_state["latest_mesh"] = None
     return mesh_state

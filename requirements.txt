@@ -1,6 +1,19 @@
+# Core dependencies
+torch==2.7.1
+torchvision==0.22.1
+torchaudio==2.7.1
+numpy==2.3.3
+pillow==11.3.0
+scipy==1.16.2
+
+# Computer Vision and 3D processing
 open3d==0.19.0
 trimesh==4.6.8
+pymeshlab==2025.7
 scikit-image==0.24.0
 opencv-python==4.11.0.86
 plyfile==1.1
+
+# Utilities
 tqdm==4.67.1
+matplotlib==3.10.7

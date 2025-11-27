@@ -635,6 +635,68 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
+    def save_subset_ply(self, path, indices):
+        if indices is None:
+            raise ValueError("indices must be provided to save_subset_ply.")
+
+        if not isinstance(indices, torch.Tensor):
+            indices = torch.as_tensor(indices, dtype=torch.long, device=self._xyz.device)
+        else:
+            indices = indices.to(self._xyz.device, dtype=torch.long)
+
+        mkdir_p(os.path.dirname(path))
+
+        if indices.numel() == 0:
+            dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+            elements = np.empty(0, dtype=dtype_full)
+            el = PlyElement.describe(elements, 'vertex')
+            PlyData([el]).write(path)
+            return
+
+        xyz = self._xyz[indices].detach().cpu().numpy()
+        normals = np.zeros_like(xyz)
+        f_dc = (
+            self._features_dc[indices]
+            .detach()
+            .transpose(1, 2)
+            .flatten(start_dim=1)
+            .contiguous()
+            .cpu()
+            .numpy()
+        )
+        f_rest = (
+            self._features_rest[indices]
+            .detach()
+            .transpose(1, 2)
+            .flatten(start_dim=1)
+            .contiguous()
+            .cpu()
+            .numpy()
+        )
+        opacities = self._opacity[indices].detach().cpu().numpy()
+        scale = self._scaling[indices].detach().cpu().numpy()
+        rotation = self._rotation[indices].detach().cpu().numpy()
+
+        if self.use_mip_filter:
+            filter_3D = self.filter_3D[indices].detach().cpu().numpy()
+
+        if self.learn_occupancy:
+            base_occupancy = self._base_occupancy[indices].detach().cpu().numpy()
+            occupancy_shift = self._occupancy_shift[indices].detach().cpu().numpy()
+
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        to_concatenate = (xyz, normals, f_dc, f_rest, opacities, scale, rotation)
+        if self.use_mip_filter:
+            to_concatenate = to_concatenate + (filter_3D,)
+        if self.learn_occupancy:
+            to_concatenate = to_concatenate + (base_occupancy, occupancy_shift)
+        attributes = np.concatenate(to_concatenate, axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
+
     def reset_opacity(self):
         if self.use_mip_filter:
             # reset opacity to by considering 3D filter
@@ -686,10 +748,25 @@ class GaussianModel:
         features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
 
         extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
-        extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
+        extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split('_')[-1]))
         if self.max_sh_degree is None:
             self.max_sh_degree = int(np.sqrt(len(extra_f_names) / 3 + 1) - 1)
-        assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3
+        else:
+            expected_extra = 3 * (self.max_sh_degree + 1) ** 2 - 3
+            if len(extra_f_names) != expected_extra:
+                inferred_degree = int(np.sqrt(len(extra_f_names) / 3 + 1) - 1)
+                print(
+                    f"[WARNING] Expected SH degree {self.max_sh_degree} (extra features {expected_extra}), "
+                    f"but file provides {len(extra_f_names)} extra features. "
+                    f"Adjusting SH degree to {inferred_degree}."
+                )
+                self.max_sh_degree = inferred_degree
+                expected_extra = 3 * (self.max_sh_degree + 1) ** 2 - 3
+                if len(extra_f_names) != expected_extra:
+                    raise ValueError(
+                        f"Cannot reconcile SH degree. File has {len(extra_f_names)} extra features, "
+                        f"which does not match expected {expected_extra} for degree {self.max_sh_degree}."
+                    )
         features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
         for idx, attr_name in enumerate(extra_f_names):
             features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
@@ -1064,9 +1141,6 @@ class GaussianModel:
         self._culling=torch.zeros((self._xyz.shape[0], num_views), dtype=torch.bool, device='cuda')
         self.factor_culling=torch.ones((self._xyz.shape[0],1), device='cuda')
 
-
-
-
     def depth_reinit(self, scene, render_depth, iteration, num_depth, args, pipe, background):
 
         out_pts_list=[]
@@ -1281,7 +1355,7 @@ class GaussianModel:
         self.factor_culling=count_vis/(count_rad+1e-1)
 
         non_prune_mask = init_cdf_mask(importance=imp_score, thres=0.999) 
-        prune_mask = (count_vis<=1)[:,0]
+        prune_mask = (count_vis==0)[:,0]
         prune_mask = torch.logical_or(prune_mask, non_prune_mask==False)
         self.prune_points(prune_mask) 
 

@@ -1,3 +1,5 @@
+#include <cfloat>
+#include <cfloat>
 /*
  * Copyright (C) 2023, Inria
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
@@ -20,7 +22,6 @@
 #include <cuda_runtime_api.h>
 #include <thrust/device_vector.h>
 #include <thrust/sequence.h>
-#define __CUDACC__
 #include <cooperative_groups.h>
 #include <cooperative_groups/reduce.h>
 

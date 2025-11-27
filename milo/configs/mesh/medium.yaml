@@ -1,0 +1,62 @@
+# Regularization schedule
+start_iter: 8_001
+mesh_update_interval: 1
+stop_iter: 18_000
+
+# Depth loss weight
+use_depth_loss: true
+depth_weight: 0.05
+depth_ratio: 1.0
+mesh_depth_loss_type: "log"
+
+# Normal loss weight
+use_normal_loss: true
+normal_weight: 0.05
+use_depth_normal: true
+
+# Delaunay computation
+delaunay_reset_interval: 500
+n_max_points_in_delaunay: 1_200_000
+delaunay_sampling_method: "surface"
+filter_large_edges: true
+collapse_large_edges: false
+
+# Rasterization
+use_scalable_renderer: false
+
+# SDF computation
+sdf_reset_interval: 500
+sdf_default_isosurface: 0.5
+transform_sdf_to_linear_space: false
+min_occupancy_value: 0.0000000001
+
+#   > For Integrate
+use_ema: true
+alpha_ema: 0.4
+
+#   > For TSDF
+trunc_margin: 0.002
+
+#   > For learnable
+occupancy_mode: "occupancy_shift"
+#       > Gaussian centers regularization
+enforce_occupied_centers: true
+occupied_centers_weight: 0.005
+#       > Occupancy labels loss
+use_occupancy_labels_loss: true
+reset_occupancy_labels_every: 400
+occupancy_labels_loss_weight: 0.005
+#       > SDF reset
+fix_set_of_learnable_sdfs: true
+learnable_sdf_reset_mode: "ema"
+learnable_sdf_reset_stop_iter: 13_001
+learnable_sdf_reset_alpha_ema: 0.4
+
+method_to_reset_sdf: "depth_fusion"
+n_binary_steps_to_reset_sdf: 0
+sdf_reset_linearization_n_steps: 20
+sdf_reset_linearization_enforce_std: 0.5
+depth_fusion_reset_tolerance: 0.1
+
+# Foreground Culling
+radius_culling: -1.0

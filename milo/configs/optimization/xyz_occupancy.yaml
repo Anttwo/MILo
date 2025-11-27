@@ -1,0 +1,42 @@
+# 优化位置+占用配置 (Position + Occupancy optimization)
+# 适用场景: 需要精细调整mesh提取质量，改善mesh拓扑
+
+gaussian_params:
+  _xyz:
+    trainable: true
+    lr: 5.0e-4
+  _features_dc:
+    trainable: false
+    lr: 0.0
+  _features_rest:
+    trainable: false
+    lr: 0.0
+  _scaling:
+    trainable: false
+    lr: 0.0
+  _rotation:
+    trainable: false
+    lr: 0.0
+  _opacity:
+    trainable: false
+    lr: 0.0
+  _base_occupancy:
+    trainable: false
+    lr: 0.0
+  _occupancy_shift:
+    trainable: true      # 允许调整SDF占用值
+    lr: 5.0e-5           # 较小的学习率避免拓扑突变
+
+loss_weights:
+  depth: 1.0
+  normal: 1.0
+  mesh_depth: 0.2        # 增加mesh损失权重
+  mesh_normal: 0.2
+
+depth_processing:
+  clip_min: 0.0
+  clip_max: null
+
+mesh_regularization:
+  depth_weight: 0.15     # 增加mesh正则化强度
+  normal_weight: 0.15

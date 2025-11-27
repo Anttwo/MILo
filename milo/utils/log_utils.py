@@ -1,5 +1,5 @@
 import os
-from typing import List, Union, Dict, Any
+from typing import List, Union, Dict, Any, Optional
 import torch
 import numpy as np
 import math
@@ -115,6 +115,22 @@ def make_log_figure(
             else:
                 log_images_dict[f"image_{i}"] = log_image
         return log_images_dict
+
+
+def save_inter_figure(depth_diff: torch.Tensor, normal_diff: torch.Tensor, save_path: str):
+    plt.figure(figsize=(12, 6))
+    plt.suptitle("inter")
+    plt.subplot(1, 2, 1)
+    plt.imshow(depth_diff.cpu(), cmap="Spectral")
+    plt.title("depth")
+    plt.colorbar()
+    plt.subplot(1, 2, 2)
+    plt.imshow(normal_diff.cpu(), cmap="Spectral", vmin=0.0, vmax=2.0)
+    plt.title("normal")
+    plt.colorbar()
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(save_path)
+    plt.close()
 
 
 def training_report(iteration, l1_loss, testing_iterations, scene, renderFunc, renderArgs):
@@ -263,6 +279,35 @@ def log_training_progress(
                 )) / 2.
             )
             titles_to_log.append(f"Mesh Normals {viewpoint_idx}")
+
+            # Depth/Normal diff for the current logging view
+            mesh_depth_map = mesh_render_pkg["depth"].detach().squeeze()
+            gauss_depth_map = render_pkg["median_depth"].detach().squeeze()
+            valid_depth_mask = (mesh_depth_map > 0) & (gauss_depth_map > 0)
+            depth_diff = torch.zeros_like(mesh_depth_map)
+            depth_diff[valid_depth_mask] = (mesh_depth_map - gauss_depth_map).abs()[valid_depth_mask]
+
+            mesh_normals_view = fix_normal_map(
+                viewpoint_cam,
+                mesh_render_pkg["normals"].detach(),
+                normal_in_view_space=True,
+            )
+            gauss_normals_view = fix_normal_map(
+                viewpoint_cam,
+                render_pkg["normal"].detach(),
+                normal_in_view_space=True,
+            )
+            if mesh_normals_view.shape[0] == 3:
+                mesh_normals_view = mesh_normals_view.permute(1, 2, 0)
+            if gauss_normals_view.shape[0] == 3:
+                gauss_normals_view = gauss_normals_view.permute(1, 2, 0)
+            normal_dot = (mesh_normals_view * gauss_normals_view).sum(dim=-1).clamp(-1., 1.)
+            normal_diff = (1. - normal_dot) * valid_depth_mask.float()
+
+            images_to_log.append(depth_diff)
+            titles_to_log.append(f"Depth Diff {viewpoint_idx}")
+            images_to_log.append(normal_diff)
+            titles_to_log.append(f"Normal Diff {viewpoint_idx}")
         
         log_images_dict = make_log_figure(
             images=images_to_log, 

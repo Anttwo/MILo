@@ -1,0 +1,148 @@
+
+# ============================================================================
+# 高斯参数优化配置文件 (Gaussian Parameters Optimization Config)
+# ============================================================================
+# 此配置文件用于控制yufu2mesh训练过程中的所有可训练参数、学习率和损失权重
+# This config controls all trainable parameters, learning rates and loss weights
+
+# ----------------------------------------------------------------------------
+# 1. 高斯参数优化设置 (Gaussian Parameters Optimization)
+# ----------------------------------------------------------------------------
+# 定义哪些高斯参数需要被优化，以及各自的学习率
+# Define which Gaussian parameters to optimize and their learning rates
+
+gaussian_params:
+  # 位置参数 (Position parameters)
+  # _xyz: 高斯中心位置，3D坐标
+  _xyz:
+    trainable: true      # 是否训练此参数 (whether to train this parameter)
+    lr: 5.0e-4          # 学习率 (learning rate)
+
+  # 外观参数 (Appearance parameters - color/SH coefficients)
+  # _features_dc: 球谐函数0阶系数（主颜色）
+  _features_dc:
+    trainable: false     # 默认冻结外观参数 (freeze appearance by default)
+    lr: 1.0e-4
+
+  # _features_rest: 球谐函数高阶系数（视角相关颜色）
+  _features_rest:
+    trainable: false
+    lr: 1.0e-4
+
+  # 几何形状参数 (Geometry parameters)
+  # _scaling: 高斯椭球的3轴缩放
+  _scaling:
+    trainable: false     # 默认冻结形状参数 (freeze geometry by default)
+    lr: 1.0e-4
+
+  # _rotation: 高斯椭球的旋转四元数
+  _rotation:
+    trainable: false
+    lr: 1.0e-4
+
+  # 不透明度参数 (Opacity parameter)
+  # _opacity: 每个高斯的不透明度
+  _opacity:
+    trainable: false     # 默认冻结不透明度 (freeze opacity by default)
+    lr: 1.0e-4
+
+  # SDF占用参数 (SDF Occupancy parameters for mesh extraction)
+  # _base_occupancy: 占用网格基础值（由深度融合初始化，不训练）
+  _base_occupancy:
+    trainable: false     # 通常不训练base值 (usually don't train base values)
+    lr: 0.0
+
+  # _occupancy_shift: 占用网格偏移量（可学习的调整）
+  _occupancy_shift:
+    trainable: false     # 默认冻结，避免过度修改mesh topology
+    lr: 1.0e-4
+
+# ----------------------------------------------------------------------------
+# 2. 损失函数权重 (Loss Weights)
+# ----------------------------------------------------------------------------
+# 控制各个损失项在总损失中的比重
+# Control the weight of each loss component in the total loss
+
+loss_weights:
+  # 深度一致性损失 (Depth consistency loss)
+  # 衡量渲染深度与GT深度的差异 (measures difference between rendered and GT depth)
+  depth: 1.0
+
+  # 法线一致性损失 (Normal consistency loss)
+  # 衡量渲染法线与GT法线的差异 (measures difference between rendered and GT normals)
+  normal: 1.0
+
+  # Mesh正则化 - 深度损失 (Mesh regularization - depth loss)
+  # 从提取的mesh渲染的深度与高斯渲染深度的一致性
+  mesh_depth: 0.1
+
+  # Mesh正则化 - 法线损失 (Mesh regularization - normal loss)
+  # 从提取的mesh渲染的法线与高斯渲染法线的一致性
+  mesh_normal: 0.1
+
+# ----------------------------------------------------------------------------
+# 3. 深度处理设置 (Depth Processing Settings)
+# ----------------------------------------------------------------------------
+# 控制深度图的加载和预处理
+# Control depth map loading and preprocessing
+
+depth_processing:
+  # 深度裁剪最小值 (minimum depth clipping value)
+  # 小于此值的深度会被裁剪，设为null或0表示不裁剪
+  clip_min: 0.0
+
+  # 深度裁剪最大值 (maximum depth clipping value)
+  # 大于此值的深度会被裁剪，设为null表示不裁剪
+  # 示例: 对于户外场景可以设置为50.0或100.0来去除远景噪声
+  clip_max: null
+
+# ----------------------------------------------------------------------------
+# 4. Mesh正则化权重覆盖 (Mesh Regularization Weight Override)
+# ----------------------------------------------------------------------------
+# 这些权重会覆盖mesh配置文件(如configs/mesh/medium.yaml)中的默认值
+# These weights override the defaults in mesh config files (e.g., configs/mesh/medium.yaml)
+
+mesh_regularization:
+  # mesh深度项权重 (mesh depth term weight)
+  # 控制mesh提取过程中深度一致性的重要程度
+  depth_weight: 0.1
+
+  # mesh法线项权重 (mesh normal term weight)
+  # 控制mesh提取过程中法线平滑度的重要程度
+  normal_weight: 0.1
+
+# ============================================================================
+# 使用说明 (Usage Instructions)
+# ============================================================================
+#
+# 1. 基础使用 (Basic usage):
+#    python yufu2mesh_new.py --opt_config default
+#
+# 2. 使用自定义配置 (Use custom config):
+#    python yufu2mesh_new.py --opt_config my_config
+#    (会自动查找 configs/optimization/my_config.yaml)
+#
+# 3. 使用完整路径 (Use full path):
+#    python yufu2mesh_new.py --opt_config /path/to/custom_config.yaml
+#
+# ============================================================================
+# 常用配置示例 (Common Configuration Examples)
+# ============================================================================
+#
+# 场景1: 只优化位置 (Only optimize positions)
+#   - 适用于已有良好初始化的高斯，只需微调位置
+#   - _xyz: trainable=true, 其他全部false
+#
+# 场景2: 优化位置+形状 (Optimize positions + geometry)
+#   - 适用于需要调整高斯形状以更好拟合深度的情况
+#   - _xyz, _scaling, _rotation: trainable=true
+#
+# 场景3: 全参数优化 (Full optimization)
+#   - 适用于初始化质量较差，需要全面优化的情况
+#   - 所有参数: trainable=true (但要小心过拟合)
+#
+# 场景4: 优化位置+占用 (Optimize positions + occupancy)
+#   - 适用于需要精细调整mesh提取质量的情况
+#   - _xyz, _occupancy_shift: trainable=true
+#
+# ============================================================================

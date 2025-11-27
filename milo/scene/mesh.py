@@ -3,9 +3,11 @@ import torch
 import nvdiffrast.torch as dr
 from scene.cameras import Camera
 from utils.geometry_utils import transform_points_world_to_view
+import os
+import nvdiffrast.torch as dr
 
 
-def nvdiff_rasterization(
+def nvdiff_rasterization_old(
     camera,
     image_height:int, 
     image_width:int,
@@ -43,6 +45,123 @@ def nvdiff_rasterization(
     if return_positions:
         _output = _output + (pos,)
     return _output
+
+def nvdiff_rasterization(
+    camera,
+    image_height: int,
+    image_width: int,
+    verts: torch.Tensor,
+    faces: torch.Tensor,
+    return_indices_only: bool = False,
+    glctx=None,
+    return_rast_out: bool = False,
+    return_positions: bool = False,
+):
+    """
+    与原函数等价的替换版，支持按三角形分块（env: MILO_RAST_TRI_CHUNK），
+    并修正：nvdiffrast CUDA 后端的 `ranges` 必须在 CPU。
+    """
+    import os
+    import torch
+    import nvdiffrast.torch as dr
+
+    device = verts.device
+    dtype = verts.dtype
+
+    # 1) 裁剪空间坐标（与原版一致）
+    cam_mtx = camera.full_proj_transform
+    pos = torch.cat([verts, torch.ones([verts.shape[0], 1], device=device, dtype=dtype)], dim=1)
+    pos = torch.matmul(pos, cam_mtx)[None]  # [1,V,4]
+
+    # 2) 准备 tri / 形参
+    faces = faces.to(torch.int32).contiguous()
+    # 与 pos 同设备更稳（nvdiffrast 在很多场景都支持 tri 在 GPU/CPU，但统一更省心）
+    faces_dev = faces.to(pos.device)
+
+    H, W = int(image_height), int(image_width)
+    chunk = int(os.getenv("MILO_RAST_TRI_CHUNK", "0") or "0")
+    use_chunking = chunk > 0 and faces.shape[0] > chunk
+
+    # 快速路径：不分块，完全等价原实现
+    if not use_chunking:
+        rast_out, _ = dr.rasterize(glctx, pos=pos, tri=faces_dev, resolution=[H, W])
+        bary_coords = rast_out[..., :2]
+        zbuf = rast_out[..., 2]
+        pix_to_face = rast_out[..., 3].to(torch.int32) - 1  # 未命中 => -1
+        if return_indices_only:
+            return pix_to_face
+        _out = (bary_coords, zbuf, pix_to_face)
+        if return_rast_out:
+            _out += (rast_out,)
+        if return_positions:
+            _out += (pos,)
+        return _out
+
+    # 分块路径：ranges 必须在 CPU！
+    z_ndc = (pos[..., 2:3] / (pos[..., 3:4] + 1e-20)).contiguous()  # [1,V,1]
+
+    best_rast = None
+    best_depth = None
+    n_faces = int(faces.shape[0])
+    start = 0
+
+    def _normalize_tri_id(rast_chunk, start_idx, count_idx):
+        tri_raw = rast_chunk[..., 3:4].to(torch.int64)  # >0 => 命中
+        if tri_raw.numel() == 0:
+            return rast_chunk[..., 3:4]
+        maxid = int(tri_raw.max().item())
+        if maxid == 0:
+            return rast_chunk[..., 3:4]
+        # 如果是局部编号（1..count），平移为全局（1..n_faces）
+        if maxid <= count_idx:
+            tri_adj = torch.where(tri_raw > 0, tri_raw + start_idx, tri_raw)
+        else:
+            tri_adj = tri_raw
+        return tri_adj.to(rast_chunk.dtype)
+
+    while start < n_faces:
+        count = min(chunk, n_faces - start)
+        # ！！！关键修正：ranges 在 CPU 上！！！
+        ranges_cpu = torch.tensor([[start, count]], device="cpu", dtype=torch.int32)
+
+        rast_chunk, _ = dr.rasterize(
+            glctx, pos=pos, tri=faces_dev, resolution=[H, W], ranges=ranges_cpu
+        )
+
+        depth_chunk, _ = dr.interpolate(z_ndc, rast_chunk, faces_dev)  # [1,H,W,1]
+        tri_id_adj = _normalize_tri_id(rast_chunk, start, count)
+
+        if best_rast is None:
+            best_rast = torch.zeros_like(rast_chunk)
+            best_depth = torch.full_like(depth_chunk, float("inf"))
+
+        hit = (tri_id_adj > 0)
+        prev_hit = (best_rast[..., 3:4] > 0)
+        closer = hit & (~prev_hit | (depth_chunk < best_depth))
+
+        rast_chunk = torch.cat([rast_chunk[..., :3], tri_id_adj], dim=-1)
+
+        best_depth = torch.where(closer, depth_chunk, best_depth)
+        best_rast = torch.where(closer.expand_as(best_rast), rast_chunk, best_rast)
+
+        start += count
+
+    rast_out = best_rast
+    bary_coords = rast_out[..., :2]
+    zbuf = rast_out[..., 2]
+    pix_to_face = rast_out[..., 3].to(torch.int32) - 1  # 未命中 => -1
+
+    if return_indices_only:
+        return pix_to_face
+
+    _output = (bary_coords, zbuf, pix_to_face)
+    if return_rast_out:
+        _output += (rast_out,)
+    if return_positions:
+        _output += (pos,)
+    return _output
+
+
 
 
 class Meshes(torch.nn.Module):
@@ -191,7 +310,11 @@ class MeshRasterizer(torch.nn.Module):
             self.cameras = cameras
         
         if use_opengl:
-            self.gl_context = dr.RasterizeGLContext()
+            backend = os.environ.get("NVDIFRAST_BACKEND", "gl").lower()
+            if backend == "cuda":
+                self.gl_context = dr.RasterizeCudaContext()
+            else:
+                self.gl_context = dr.RasterizeGLContext()
         else:
             self.gl_context = dr.RasterizeCudaContext()
             
@@ -429,6 +552,17 @@ class ScalableMeshRenderer(torch.nn.Module):
             filtered_pix_to_face = filtered_pix_to_face - 1
             mesh = Meshes(verts=mesh.verts, faces=filtered_faces, verts_colors=mesh.verts_colors)
             fragments.pix_to_face = filtered_pix_to_face
+
+        if mesh.faces.shape[0] == 0:
+            H, W = fragments.zbuf.shape[1:3]
+            output_pkg = {}
+            if return_depth:
+                output_pkg["depth"] = torch.zeros(1, H, W, 1, device=mesh.verts.device)
+            if return_normals:
+                output_pkg["normals"] = torch.zeros(1, H, W, 3, device=mesh.verts.device)
+            if return_pix_to_face:
+                output_pkg["pix_to_face"] = fragments.pix_to_face
+            return output_pkg
         
         # Rebuild rast_out
         rast_out = torch.zeros(*fragments.zbuf.shape[:-1], 4, device=fragments.zbuf.device)
@@ -457,14 +591,21 @@ class ScalableMeshRenderer(torch.nn.Module):
             color_idx = features.shape[-1]
             features = torch.cat([features, mesh.verts_colors], dim=-1)  # Shape (N, n_features)
         
+        # Short-circuit: no visible triangles -> return zero maps
+        if mesh.faces.shape[0] == 0:
+            H, W = fragments.zbuf.shape[1:3]
+            if return_depth:
+                output_pkg["depth"] = torch.zeros(1, H, W, 1, device=mesh.verts.device)
+            if return_colors:
+                output_pkg["rgb"] = torch.zeros(1, H, W, 3, device=mesh.verts.device)
+            if return_normals:
+                output_pkg["normals"] = torch.zeros(1, H, W, 3, device=mesh.verts.device)
+            if return_pix_to_face:
+                output_pkg["pix_to_face"] = fragments.pix_to_face
+            return output_pkg
+
         # Compute image
-        if True:
-            feature_img, _ = dr.interpolate(features[None], rast_out, mesh.faces)  # Shape (1, H, W, n_features)
-        else:
-            pix_to_verts = mesh.faces[fragments.pix_to_face]  # Shape (1, H, W, 1, 3)
-            pix_to_features = features[pix_to_verts]  # Shape (1, H, W, 1, 3, n_features)
-            feature_img = (pix_to_features * fragments.bary_coords[..., None]).sum(dim=-2)  # Shape (1, H, W, 1, n_features)
-            feature_img = feature_img.squeeze(-2)  # Shape (1, H, W, n_features)
+        feature_img, _ = dr.interpolate(features[None], rast_out, mesh.faces)  # Shape (1, H, W, n_features)
         
         # Antialiasing for propagating gradients
         if use_antialiasing:

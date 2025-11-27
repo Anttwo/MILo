@@ -1,0 +1,42 @@
+# 优化位置+几何配置 (Position + Geometry optimization)
+# 适用场景: 需要调整高斯形状以更好拟合深度和法线
+
+gaussian_params:
+  _xyz:
+    trainable: true
+    lr: 5.0e-4
+  _features_dc:
+    trainable: false
+    lr: 0.0
+  _features_rest:
+    trainable: false
+    lr: 0.0
+  _scaling:
+    trainable: true      # 允许调整高斯椭球的尺度
+    lr: 1.0e-4
+  _rotation:
+    trainable: true      # 允许调整高斯椭球的朝向
+    lr: 1.0e-4
+  _opacity:
+    trainable: false
+    lr: 0.0
+  _base_occupancy:
+    trainable: false
+    lr: 0.0
+  _occupancy_shift:
+    trainable: false
+    lr: 0.0
+
+loss_weights:
+  depth: 1.0
+  normal: 1.5          # 增加法线权重，因为几何参数会影响法线
+  mesh_depth: 0.1
+  mesh_normal: 0.15
+
+depth_processing:
+  clip_min: 0.0
+  clip_max: null
+
+mesh_regularization:
+  depth_weight: 0.1
+  normal_weight: 0.15

@@ -1,0 +1,42 @@
+# 纯几何优化配置 (Geometry-only optimization)
+# 适用场景: 位置已经优化好，只需要调整高斯的形状和朝向以更好地拟合法线
+
+gaussian_params:
+  _xyz:
+    trainable: false     # 冻结位置
+    lr: 0.0
+  _features_dc:
+    trainable: false
+    lr: 0.0
+  _features_rest:
+    trainable: false
+    lr: 0.0
+  _scaling:
+    trainable: true      # 优化高斯椭球的尺度
+    lr: 1.0e-4
+  _rotation:
+    trainable: true      # 优化高斯椭球的朝向
+    lr: 1.0e-4
+  _opacity:
+    trainable: false
+    lr: 0.0
+  _base_occupancy:
+    trainable: false
+    lr: 0.0
+  _occupancy_shift:
+    trainable: false
+    lr: 0.0
+
+loss_weights:
+  depth: 0.5           # 降低深度权重，因为位置不变
+  normal: 2.0          # 大幅增加法线权重，几何形状主要影响法线
+  mesh_depth: 0.05
+  mesh_normal: 0.2     # 增加mesh法线权重
+
+depth_processing:
+  clip_min: 0.0
+  clip_max: null
+
+mesh_regularization:
+  depth_weight: 0.05
+  normal_weight: 0.2   # 增强法线正则化

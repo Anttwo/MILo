@@ -1,0 +1,43 @@
+# 全参数优化配置 (Full parameter optimization)
+# 适用场景: 初始化质量较差，需要全面优化
+# 警告: 可能导致过拟合，建议谨慎使用
+
+gaussian_params:
+  _xyz:
+    trainable: true
+    lr: 5.0e-4
+  _features_dc:
+    trainable: true      # 优化颜色
+    lr: 2.5e-4
+  _features_rest:
+    trainable: true
+    lr: 2.5e-5           # 高阶SH系数用更小学习率
+  _scaling:
+    trainable: true
+    lr: 1.0e-4
+  _rotation:
+    trainable: true
+    lr: 1.0e-4
+  _opacity:
+    trainable: true      # 优化不透明度
+    lr: 5.0e-5
+  _base_occupancy:
+    trainable: false     # base值仍然不训练
+    lr: 0.0
+  _occupancy_shift:
+    trainable: true
+    lr: 5.0e-5
+
+loss_weights:
+  depth: 1.0
+  normal: 1.5
+  mesh_depth: 0.15
+  mesh_normal: 0.15
+
+depth_processing:
+  clip_min: 0.0
+  clip_max: null
+
+mesh_regularization:
+  depth_weight: 0.12
+  normal_weight: 0.12

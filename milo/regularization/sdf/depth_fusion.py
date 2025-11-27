@@ -536,6 +536,8 @@ def evaluate_mesh_occupancy(
     
     for cam_id, view in enumerate(tqdm(views, desc=f"Computing occupancy from mesh")):
         faces_mask = is_in_view_frustum(mesh.verts, view)[mesh.faces].any(axis=1)
+        if faces_mask.sum() == 0:
+            continue
         render_pkg = mesh_renderer(
             Meshes(verts=mesh.verts, faces=mesh.faces[faces_mask]),
             cam_idx=cam_id,
@@ -609,6 +611,8 @@ def evaluate_mesh_colors(
     
     for cam_id, view in enumerate(tqdm(views, desc=f"Computing vertex colors")):
         faces_mask = is_in_view_frustum(mesh.verts, view)[mesh.faces].any(axis=1)
+        if faces_mask.sum() == 0:
+            continue
         render_pkg = mesh_renderer(
             Meshes(verts=mesh.verts, faces=mesh.faces[faces_mask]),
             cam_idx=cam_id,

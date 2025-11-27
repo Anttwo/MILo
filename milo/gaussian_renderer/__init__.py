@@ -175,8 +175,18 @@ def render_imp(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tens
     else:
         colors_precomp = override_color
 
-    if culling==None:
-        culling=torch.zeros(means3D.shape[0], dtype=torch.bool, device='cuda')
+    if culling is None:
+        culling = torch.zeros(means3D.shape[0], dtype=torch.bool, device=means3D.device)
+    else:
+        if culling.dtype != torch.bool:
+            culling = culling.to(torch.bool)
+        if culling.shape != (means3D.shape[0],):
+            culling = culling.reshape(-1)
+        if culling.numel() != means3D.shape[0]:
+            raise ValueError(f"Culling mask has {culling.numel()} entries, "
+                             f"but {means3D.shape[0]} Gaussians provided.")
+        if not culling.is_contiguous():
+            culling = culling.contiguous()
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii, accum_max_count  = rasterizer(

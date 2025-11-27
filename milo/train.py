@@ -2,6 +2,8 @@ import os
 import sys
 import gc
 import yaml
+import json
+import random
 from functools import partial
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, '..'))
@@ -207,6 +209,9 @@ def training(
                 viewpoint_cam, gaussians, pipe, background, 
                 culling=gaussians._culling[:,viewpoint_cam.uid],
             )
+
+        if "area_max" not in render_pkg:
+            render_pkg["area_max"] = torch.zeros_like(render_pkg["radii"])
 
         # ---Compute losses---
         image, viewspace_point_tensor, visibility_filter, radii = (

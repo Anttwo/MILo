@@ -1,0 +1,42 @@
+# 只优化位置配置 (Position-only optimization)
+# 适用场景: 已有良好初始化，只需微调位置以匹配深度
+
+gaussian_params:
+  _xyz:
+    trainable: true
+    lr: 5.0e-4
+  _features_dc:
+    trainable: false
+    lr: 0.0
+  _features_rest:
+    trainable: false
+    lr: 0.0
+  _scaling:
+    trainable: false
+    lr: 0.0
+  _rotation:
+    trainable: false
+    lr: 0.0
+  _opacity:
+    trainable: false
+    lr: 0.0
+  _base_occupancy:
+    trainable: false
+    lr: 0.0
+  _occupancy_shift:
+    trainable: false
+    lr: 0.0
+
+loss_weights:
+  depth: 1.0
+  normal: 1.0
+  mesh_depth: 0.1
+  mesh_normal: 0.1
+
+depth_processing:
+  clip_min: 0.0
+  clip_max: null
+
+mesh_regularization:
+  depth_weight: 0.1
+  normal_weight: 0.1
