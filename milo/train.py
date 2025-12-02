@@ -27,6 +27,7 @@ from arguments import ModelParams, PipelineParams, OptimizationParams, read_conf
 try:
     import wandb
     WANDB_FOUND = True
+    print("find wandb repo \n")
 except ImportError:
     WANDB_FOUND = False
 
@@ -140,6 +141,7 @@ def training(
     # ---Start optimization loop---    
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
+
 
     for iteration in range(first_iter, opt.iterations + 1):   
 
@@ -516,7 +518,6 @@ def prepare_output_and_logger(dataset, args):
         run=None
         print("[INFO] WandB not found, skipping logging.")
     return run
-
 
 if __name__ == "__main__":
     # Set up command line argument parser

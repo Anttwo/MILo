@@ -1,0 +1,62 @@
+# Regularization schedule
+start_iter: 20_001
+mesh_update_interval: 1 
+stop_iter: 30_000
+
+# Depth loss weight
+use_depth_loss: true
+depth_weight: 0.01  # 0.05
+depth_ratio: 1.0  # 0.6 
+mesh_depth_loss_type: "log"  # "log"
+
+# Normal loss weight
+use_normal_loss: true  # true
+normal_weight: 0.01  # 0.05
+use_depth_normal: true  # true
+
+# Delaunay computation
+delaunay_reset_interval: 500  # 500
+n_max_points_in_delaunay: 5_400_000  # -1 for no limit
+delaunay_sampling_method: "surface"  # "random", "surface" or "surface+opacity"
+filter_large_edges: true  # true or false?
+collapse_large_edges: false  # true or false?
+
+# Rasterization
+use_scalable_renderer: false
+
+# SDF computation
+sdf_reset_interval: 500  # 500
+sdf_default_isosurface: 0.5  # 0.5
+transform_sdf_to_linear_space: false  # SHOULD BE FALSE
+min_occupancy_value: 0.0000000001  # 0.0000000001
+
+#   > For Integrate
+use_ema: true  # true
+alpha_ema: 0.4  # 0.4
+
+#   > For TSDF
+trunc_margin: 0.002  # 0.002
+
+#   > For learnable
+occupancy_mode: "occupancy_shift"  # "occupancy_shift" or "density_shift"
+#       > Gaussian centers regularization
+enforce_occupied_centers: true  # true
+occupied_centers_weight: 0.001  # 0.005
+#       > Occupancy labels loss
+use_occupancy_labels_loss: true  # true or false?
+reset_occupancy_labels_every: 200  # 200
+occupancy_labels_loss_weight: 0.001  # 0.005
+#       > SDF reset
+fix_set_of_learnable_sdfs: true  # false or true?
+learnable_sdf_reset_mode: "ema"  # "none" or "ema"
+learnable_sdf_reset_stop_iter: 25_001
+learnable_sdf_reset_alpha_ema: 0.4  # 0.4
+
+method_to_reset_sdf: "depth_fusion"  # "integration" or "depth_fusion"
+n_binary_steps_to_reset_sdf: 0  # Use 0 to disable binary search
+sdf_reset_linearization_n_steps: 20
+sdf_reset_linearization_enforce_std: 0.5  # 0.5
+depth_fusion_reset_tolerance: 0.1
+
+# Foreground Culling
+radius_culling: -1.0  # -1.0 for no culling
