@@ -454,7 +454,10 @@ def training(
                 (iteration == args.warn_until_iter)
                 or (iteration % args.update_mip_filter_every == 0)
             ):
-                gaussians.compute_3D_filter(cameras=scene.getTrainCameras_warn_up(iteration, args.warn_until_iter, scale=1.0, scale2=2.0).copy())
+                if iteration < opt.iterations - args.update_mip_filter_every:
+                    gaussians.compute_3D_filter(cameras=scene.getTrainCameras_warn_up(iteration, args.warn_until_iter, scale=1.0, scale2=2.0).copy())
+                else:
+                    print(f"[INFO] Skipping 3D Mip Filter update at iteration {iteration}")
 
             # ---Optimizer step---
             if iteration < opt.iterations:
