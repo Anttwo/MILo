@@ -40,6 +40,7 @@ _Our method introduces a novel differentiable mesh extraction framework that ope
 
 - ⬛ Implement a simple training viewer using the <a href="https://github.com/graphdeco-inria/graphdecoviewer">GraphDeco viewer</a>.
 - ⬛ Add the mesh-based rendering evaluation scripts in `./milo/eval/mesh_nvs`.
+- ✅ Add DTU training and evaluation scripts.
 - ✅ Add low-res and very-low-res training for light output meshes (under 50MB and under 20MB).
 - ✅ Add T&T evaluation scripts in `./milo/eval/tnt/`.
 - ✅ Add Blender add-on (for mesh-based editing and animation) to the repo.
@@ -244,6 +245,9 @@ with `--sampling_factor 0.1`, for instance.
 
 Please refer to the <a href="https://depth-anything-v2.github.io/">DepthAnythingV2</a> repo to download the `vitl` checkpoint required for Depth-Order regularization. Then, move the checkpoint file to `./submodules/Depth-Anything-V2/checkpoints/`.
 
+You can also use the `train_regular_densification.py` script instead of `train.py` to replace the fast densification from Mini-Splatting2 with a more traditional densification strategy for Gaussians, as used in [Gaussian Opacity Fields](https://github.com/autonomousvision/gaussian-opacity-fields/tree/main) and [RaDe-GS](https://baowenz.github.io/radegs/).
+By default, this script will use its own config file `--mesh_config default_regular_densification`.
+
 ### Example Commands
 
 Basic training for indoor scenes with logging:
@@ -269,6 +273,11 @@ python train.py -s <PATH TO COLMAP DATASET> -m <OUTPUT_DIR> --imp_metric indoor 
 Training with depth-order regularization:
 ```bash
 python train.py -s <PATH TO COLMAP DATASET> -m <OUTPUT_DIR> --imp_metric indoor --rasterizer radegs --depth_order --depth_order_config strong --log_interval 200 --data_device cpu
+```
+
+Training with a traditional, slower densification strategy for Gaussians:
+```bash
+python train_regular_densification.py -s <PATH TO COLMAP DATASET> -m <OUTPUT_DIR> --imp_metric indoor --rasterizer radegs --log_interval 200 --data_device cpu
 ```
 
 </details>
@@ -328,6 +337,19 @@ python mesh_extract_integration.py \
 ```
 
 The mesh will be saved at either `<MODEL_DIR>/mesh_integration_sdf.ply` or `<MODEL_DIR>/mesh_depth_fusion_sdf.ply` depending on the SDF computation method.
+
+### 3.3. Use regular, non-scalable TSDF
+
+We also propose a script to extract a mesh using traditional TSDF on a regular voxel grid. This script is heavily inspired from the awesome work [2D Gaussian Splatting](https://github.com/hbb1/2d-gaussian-splatting). This mesh extraction process does not scale to unbounded real scenes with background geometry.
+```bash
+python mesh_extract_regular_tsdf.py \
+    -s <PATH TO COLMAP DATASET> \
+    -m <MODEL DIR> \
+    --rasterizer radegs \
+    --mesh_res 1024
+```
+
+The mesh will be saved at `<MODEL_DIR>/mesh_regular_tsdf_res<MESH RES>.ply`. A cleaned version of the mesh will be saved at `<MODEL_DIR>/mesh_regular_tsdf_res<MESH RES>_post.ply`, following 2DGS's postprocessing.
 
 </details>
 
@@ -562,6 +584,8 @@ If you get artifacts in the rendering, you can try to play with the various foll
 <summary>Click here to see content.</summary>
 <br>
 
+### Tanks and Temples
+
 For evaluation, please start by downloading [our COLMAP runs for the Tanks and Temples dataset](https://drive.google.com/drive/folders/1Bf7DM2DFtQe4J63bEFLceEycNf4qTcqm?usp=sharing), and make sure to move all COLMAP scene directories (Barn, Caterpillar, _etc._) inside the same directory. 
 
 Then, please download ground truth point cloud, camera poses, alignments and cropfiles from [Tanks and Temples dataset](https://www.tanksandtemples.org/download/). The ground truth dataset should be organized as:
@@ -635,6 +659,36 @@ python render.py \
     -- rasterizer <"radegs" or "gof">
 
 python metrics.py -m <path to trained model> # Compute error metrics on renderings
+```
+
+### DTU
+
+MILo is designed for maximum scalability to allow for the reconstruction of full scenes, including background elements. We optimized our method and hyperparameters to strike a balance between performance and scalability.
+
+However, we also evaluate MILo on small object-centric scenes from the DTU dataset, to verify that our mesh-in-the-loop regularization does not hurt performance in highly controlled scenarios.
+
+For these smaller scenes, the aggressive densification strategy from Mini-Splatting2 is unnecessary. Instead, we use the traditional progressive densification strategy proposed in [GOF](https://github.com/autonomousvision/gaussian-opacity-fields/tree/main) and [RaDe-GS](https://baowenz.github.io/radegs/), which is better suited for highly controlled scenarios.
+
+Similarly, since DTU scans focus on small objects of interest without background reconstruction, we employ a regular grid for mesh extraction after training (similar to GOF and RaDe-GS) rather than our scalable extraction method.
+
+We use the preprocessed DTU dataset from [2D GS](https://github.com/hbb1/2d-gaussian-splatting) for training. Please refer to the corresponding repo for downloading instructions.
+Evaluation scripts are adapted from [GOF](https://github.com/autonomousvision/gaussian-opacity-fields/tree/main) and [RaDe-GS](https://baowenz.github.io/radegs/).
+
+Please run the following commands to evaluate MILo on a single DTU scan:
+```bash
+# Training with regular densification
+python train_regular_densification.py -s <PATH TO DTU SCAN> -m <OUTPUT DIRECTORY> -r 2 --rasterizer radegs --imp_metric indoor --mesh_config default_dtu --decoupled_appearance --log_interval 200
+
+# Mesh extraction
+python ./eval/dtu/mesh_extract_dtu.py -s <PATH TO DTU SCAN> -m <OUTPUT DIRECTORY> -r 2 --rasterizer radegs
+
+# Evaluation
+python ./eval/dtu/evaluate_dtu_mesh.py -s <PATH TO DTU SCAN> -m <OUTPUT DIRECTORY> -r 2 --DTU <PATH TO GT DTU DATA> --scan_id <SCAN ID>
+```
+
+You can also run the following scripts for evaluating on the full DTU dataset:
+```bash
+python scripts/evaluate_dtu.py --data_dir <PATH TO DIRECTORY CONTAINING DTU COLMAP SCENES> --gt_dir <PATH TO GT DTU DATA> --rasterizer radegs --log_interval 200
 ```
 
 </details>
