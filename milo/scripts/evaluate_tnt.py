@@ -52,6 +52,7 @@ if __name__ == "__main__":
     parser.add_argument("--rasterizer", type=str, default="radegs", choices=["radegs", "gof"])
     parser.add_argument("--dense_gaussians", action="store_true")
     parser.add_argument("--mesh_config", type=str, default="default")
+    parser.add_argument("--no_mesh_regularization", action="store_true")
     
     # Depth
     parser.add_argument("--depth_order", action="store_true")
@@ -99,6 +100,7 @@ if __name__ == "__main__":
             f"--wandb_project {args.wandb_project}" if args.wandb_project is not None else "",
             f"--wandb_entity {args.wandb_entity}" if args.wandb_entity is not None else "",
             f"--log_interval {args.log_interval}" if args.log_interval is not None else "",
+            "--no_mesh_regularization" if args.no_mesh_regularization else "",
         ])
         
         # Mesh extraction command
@@ -128,8 +130,9 @@ if __name__ == "__main__":
         
         # Run commands
         print("\n[INFO] Running training command :", train_command, sep="\n")
-        os.system(train_command)        
-        print("\n[INFO] Running mesh extraction command :", mesh_command, sep="\n")
-        os.system(mesh_command)
-        print("\n[INFO] Running evaluation command :", eval_command, sep="\n")
-        os.system(eval_command)
+        os.system(train_command)
+        if not args.no_mesh_regularization:
+            print("\n[INFO] Running mesh extraction command :", mesh_command, sep="\n")
+            os.system(mesh_command)
+            print("\n[INFO] Running evaluation command :", eval_command, sep="\n")
+            os.system(eval_command)

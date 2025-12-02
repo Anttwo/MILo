@@ -100,6 +100,7 @@ def extract_mesh_with_sdf_refinement(
                     n_samples=n_max_gaussians_for_delaunay,
                 )
             else:
+                print(f"[INFO] Using training Delaunay Gaussians for downsampling.")
                 delaunay_xyz_idx = (gaussians._base_occupancy != 0.).any(dim=-1).nonzero().squeeze()
             print(f"[INFO] Downsampled Delaunay Gaussians from {n_gaussians_to_sample_from} to {len(delaunay_xyz_idx)}.")
             
@@ -494,6 +495,10 @@ def extract_mesh_with_sdf_refinement(
                 end_sdf.argmin(dim=1).flatten().cpu().numpy()
             ]  # TODO: Do the computation only for filtered vertices
             verts = torch.where(dmtet_vertex_mask[:, None], verts, min_end_points)
+            
+            # Verts should not be removed from the mesh, so we set the mask back to None.
+            if not mesh_config["filter_large_edges"]:
+                dmtet_vertex_mask = None
             
         # Remove out of field vertices
         if args.remove_oof_vertices:
