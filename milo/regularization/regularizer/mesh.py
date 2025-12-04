@@ -61,7 +61,7 @@ def initialize_mesh_regularization(
     print(f"         > Mesh depth loss type: {config['mesh_depth_loss_type']}")
     print(f"         > Occupancy mode: {config['occupancy_mode']}")
         
-    mesh_rasterizer = MeshRasterizer(cameras=scene.getTrainCameras().copy())
+    mesh_rasterizer = MeshRasterizer(cameras=scene.getTrainCameras().copy(), use_opengl=config['use_opengl'])
     if config["use_scalable_renderer"]:
         print("[INFO] Using scalable mesh renderer.")
         mesh_renderer = ScalableMeshRenderer(mesh_rasterizer)
