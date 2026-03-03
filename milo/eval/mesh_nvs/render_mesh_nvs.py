@@ -17,7 +17,8 @@ from argparse import ArgumentParser
 from arguments import ModelParams, PipelineParams, get_combined_args
 
 from scene import Scene
-from scene.mesh import MeshRasterizer, MeshRenderer
+from scene.mesh import MeshRasterizer
+from scene.mesh import ScalableMeshRenderer as MeshRenderer
 from scene.dataset_readers import sceneLoadTypeCallbacks
 
 from utils.general_utils import safe_state
@@ -134,7 +135,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_device", default="cuda", type=str)
     args = parser.parse_args()
 
-    output_path = args.output_path if args.output_path else os.path.join(os.path.dirname(args.ply_file), "mesh_nvs")
+    output_path = args.output_path if args.output_path else os.path.join(os.path.dirname(args.ply_file), "mesh_nvs_fixed")
     print(f"[INFO] Rendering " + args.ply_file)
     print(f"[INFO] Output path: {output_path}")
 

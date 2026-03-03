@@ -12,7 +12,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from scene.mesh import Meshes, MeshRenderer
-from utils.geometry_utils import transform_points_view_to_world
+from utils.geometry_utils import transform_points_view_to_world, is_in_view_frustum
 from utils.sh_utils import eval_sh
 from abc import abstractmethod
 import trimesh
@@ -291,8 +291,13 @@ class RenderWithColorField(torch.nn.Module):
         self.optimizer = torch.optim.Adam(grad_vars, betas=(0.9,0.99))
 
     def forward(self, viewpoint_idx : int, viewpoint_cam : any, mesh_renderer : MeshRenderer, training : bool = True, n_random_points : int = -1) -> torch.Tensor:
+        # Filter out faces not in view frustum
+        with torch.no_grad():
+            faces_mask = is_in_view_frustum(self.mesh.verts, viewpoint_cam)[self.mesh.faces].any(axis=1)
+        mesh_culled = Meshes(verts=self.mesh.verts, faces=self.mesh.faces[faces_mask])
+
         mesh_render_pkg = mesh_renderer(
-                self.mesh,
+                mesh_culled,
                 cam_idx=viewpoint_idx,
                 return_depth=True,
                 return_normals=True
