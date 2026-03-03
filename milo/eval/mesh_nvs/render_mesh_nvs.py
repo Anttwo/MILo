@@ -71,7 +71,9 @@ def train_color_field(
         
         # Render the mesh
         mesh_color = render_with_color_field(viewpoint_idx, viewpoint_cam, mesh_renderer)
-
+        if mesh_color is None:
+            print(f"[WARNING] Mesh is empty after culling. Skipping iteration {iteration}")
+            continue
         # Compute the loss
         gt_image = viewpoint_cam.original_image.cuda()
         loss = ((mesh_color - gt_image) ** 2).mean()
@@ -89,6 +91,7 @@ def train_color_field(
             param_group['lr'] = param_group['lr'] * lr_factor
 
         progress_bar.set_postfix({'loss': f'{loss.item():.4f}'})
+
                
     return render_with_color_field
     
