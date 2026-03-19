@@ -280,6 +280,20 @@ Training with a traditional, slower densification strategy for Gaussians:
 python train_regular_densification.py -s <PATH TO COLMAP DATASET> -m <OUTPUT_DIR> --imp_metric indoor --rasterizer radegs --log_interval 200 --data_device cpu
 ```
 
+Training large scenes split into partitions across multiple GPUs:
+```bash
+python milo/scripts/train_partitions.py \
+    <PARTITION_ROOT_DIR> \
+    <OUTPUT_ROOT_DIR> \
+    --gpu_ids 0 1 2 3 \
+    --imp_metric outdoor \
+    --rasterizer radegs \
+    --mesh_config highres \
+    --partition_stats_path <PARTITION_ROOT_DIR>/partition_train_stats.txt \
+    --dense_gaussians --decoupled_appearance
+```
+This launcher starts one `milo/train.py` process per partition, assigns partitions to the provided GPUs in batches, and can optionally adapt `--sampling_factor` from the partition image-count statistics file.
+
 </details>
 
 ## 3. Extracting a Mesh after Optimization
