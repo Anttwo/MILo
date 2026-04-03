@@ -23,7 +23,7 @@ from utils.general_utils import safe_state
 import uuid
 from tqdm import tqdm
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams, read_config
+from arguments import ModelParams, PipelineParams, OptimizationParams
 try:
     import wandb
     WANDB_FOUND = True
@@ -60,12 +60,13 @@ def training(
     first_iter = 0
     use_mip_filter = not args.disable_mip_filter
     gaussians = GaussianModel(
-        sh_degree=0, 
+        sh_degree=dataset.sh_degree, 
         use_mip_filter=use_mip_filter, 
         learn_occupancy=args.mesh_regularization,
         use_appearance_network=args.decoupled_appearance,
+        use_radegs_densification=True,
     )
-    scene = Scene(dataset, gaussians, resolution_scales=[1,2])
+    scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
     print(f"[INFO] Using 3D Mip Filter: {gaussians.use_mip_filter}")
     print(f"[INFO] Using learnable SDF: {gaussians.learn_occupancy}")
@@ -83,11 +84,11 @@ def training(
 
     # Initialize culling stats
     mask_blur = torch.zeros(gaussians._xyz.shape[0], device='cuda')
-    gaussians.init_culling(len(scene.getTrainCameras()))
+    gaussians.init_culling(len(scene.getTrainCameras().copy()))
     
     # Initialize 3D Mip filter
     if use_mip_filter:
-        gaussians.compute_3D_filter(cameras=scene.getTrainCameras_warn_up(first_iter + 1, args.warn_until_iter, scale=1.0, scale2=2.0).copy())
+        gaussians.compute_3D_filter(cameras=scene.getTrainCameras().copy())
 
     # Additional variables
     iter_start = torch.cuda.Event(enable_timing = True)
@@ -162,12 +163,12 @@ def training(
         gaussians.update_learning_rate(iteration)
 
         # ---Update SH degree---
-        if iteration % 1000 == 0 and iteration>args.simp_iteration1:
+        if iteration % 1000 == 0:
             gaussians.oneupSHdegree()
 
         # ---Select random viewpoint---
         if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras_warn_up(iteration, args.warn_until_iter, scale=1.0, scale2=2.0).copy()
+            viewpoint_stack = scene.getTrainCameras().copy()
             viewpoint_idx_stack = list(range(len(viewpoint_stack)))
 
         _random_view_idx = randint(0, len(viewpoint_stack)-1)
@@ -182,31 +183,11 @@ def training(
         mesh_kick_on = args.mesh_regularization and (iteration >= mesh_config["start_iter"])
         depth_order_kick_on = args.depth_order
         
-        # If depth-normal regularization or mesh-in-the-loop regularization are active,
-        # we use the rasterizer compatible with depth and normal rendering.
-        if reg_kick_on or mesh_kick_on:
-            render_pkg = render(
-                viewpoint_cam, gaussians, pipe, background,
-                require_coord=False, require_depth=True,
-            )
-            
-        # Else, if depth-order regularization is active, we use Mini-Splatting2 rasterizer 
-        # but we render depth maps. This rasterizer is necessary for densification and simplification.
-        elif depth_order_kick_on:
-            render_pkg = render_full(
-                viewpoint_cam, gaussians, pipe, background, 
-                culling=gaussians._culling[:,viewpoint_cam.uid],
-                compute_expected_normals=False,
-                compute_expected_depth=True,
-                compute_accurate_median_depth_gradient=True,
-            )
-            
-        # If no regularization is active, we just use the default Mini-Splatting2 rasterizer.
-        else:
-            render_pkg = render_imp(
-                viewpoint_cam, gaussians, pipe, background, 
-                culling=gaussians._culling[:,viewpoint_cam.uid],
-            )
+        render_pkg = render(
+            viewpoint_cam, gaussians, pipe, background,
+            require_coord=False, 
+            require_depth=True and (reg_kick_on or mesh_kick_on or depth_order_kick_on),
+        )
 
         # ---Compute losses---
         image, viewspace_point_tensor, visibility_filter, radii = (
@@ -344,106 +325,19 @@ def training(
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                gaussians.add_densification_stats_radegs(viewspace_point_tensor, visibility_filter)
 
-                if gaussians._culling[:,viewpoint_cam.uid].sum()==0:
-                    gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
-                else:
-                    # normalize xy gradient after culling
-                    gaussians.add_densification_stats_culling(viewspace_point_tensor, visibility_filter, gaussians.factor_culling)
-
-                area_max = render_pkg["area_max"]
-                mask_blur = torch.logical_or(mask_blur, area_max>(image.shape[1]*image.shape[2]/5000))
-
-                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0 and iteration != args.depth_reinit_iter:
+                if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify_and_prune_mask(opt.densify_grad_threshold, 
-                                                    0.005, scene.cameras_extent, 
-                                                    size_threshold, mask_blur)
-                    mask_blur = torch.zeros(gaussians._xyz.shape[0], device='cuda')
+                    gaussians.densify_and_prune_radegs(opt.densify_grad_threshold, 0.05, scene.cameras_extent, size_threshold)
                     gaussians_have_changed = True
-                    if use_mip_filter:
-                        gaussians.compute_3D_filter(
-                            cameras=scene.getTrainCameras_warn_up(
-                                iteration, args.warn_until_iter, scale=1.0, scale2=2.0
-                            ).copy()
-                        )
-                    
-                if iteration == args.depth_reinit_iter:
+                    if not use_mip_filter:
+                        gaussians.reset_3D_filter()
+                    else:
+                        gaussians.compute_3D_filter(cameras=scene.getTrainCameras().copy())
 
-                    num_depth = gaussians._xyz.shape[0]*args.num_depth_factor
-
-                    # interesction_preserving for better point cloud reconstruction result at the early stage, not affect rendering quality
-                    gaussians.interesction_preserving(scene, render_simp, iteration, args, pipe, background)
-                    if use_mip_filter:
-                        gaussians.compute_3D_filter(
-                            cameras=scene.getTrainCameras_warn_up(
-                                iteration, args.warn_until_iter, scale=1.0, scale2=2.0
-                            ).copy()
-                        )
-                        
-                    pts, rgb = gaussians.depth_reinit(scene, render_depth, iteration, num_depth, args, pipe, background)
-
-                    gaussians.reinitial_pts(pts, rgb)
-
-                    gaussians.training_setup(opt)
-                    gaussians.init_culling(len(scene.getTrainCameras()))
-                    mask_blur = torch.zeros(gaussians._xyz.shape[0], device='cuda')
-                    torch.cuda.empty_cache()
-                    gaussians_have_changed = True
-                    if use_mip_filter:
-                        gaussians.compute_3D_filter(
-                            cameras=scene.getTrainCameras_warn_up(
-                                iteration, args.warn_until_iter, scale=1.0, scale2=2.0
-                            ).copy()
-                        )
-
-                if iteration >= args.aggressive_clone_from_iter and iteration % args.aggressive_clone_interval == 0 and iteration!=args.depth_reinit_iter:
-                    gaussians.culling_with_clone(scene, render_simp, iteration, args, pipe, background)
-                    torch.cuda.empty_cache()
-                    mask_blur = torch.zeros(gaussians._xyz.shape[0], device='cuda')
-                    gaussians_have_changed = True
-                    if use_mip_filter:
-                        gaussians.compute_3D_filter(
-                            cameras=scene.getTrainCameras_warn_up(
-                                iteration, args.warn_until_iter, scale=1.0, scale2=2.0
-                            ).copy()
-                        )
-
-            # ---Pruning and simplification---
-            if iteration == args.simp_iteration1:
-                if args.dense_gaussians:
-                    gaussians.culling_with_importance_pruning(scene, render_simp, iteration, args, pipe, background)
-                else:
-                    gaussians.culling_with_interesction_sampling(scene, render_simp, iteration, args, pipe, background)
-                gaussians.max_sh_degree=dataset.sh_degree
-                gaussians.extend_features_rest()
-
-                gaussians.training_setup(opt)
-                torch.cuda.empty_cache()
-                gaussians_have_changed = True
-                if use_mip_filter:
-                        gaussians.compute_3D_filter(
-                            cameras=scene.getTrainCameras_warn_up(
-                                iteration, args.warn_until_iter, scale=1.0, scale2=2.0
-                            ).copy()
-                        )
-                
-            if iteration == args.simp_iteration2:
-                if args.dense_gaussians:
-                    gaussians.culling_with_importance_pruning(scene, render_simp, iteration, args, pipe, background)
-                else:
-                    gaussians.culling_with_interesction_preserving(scene, render_simp, iteration, args, pipe, background)
-                torch.cuda.empty_cache()
-                gaussians_have_changed = True
-                if use_mip_filter:
-                        gaussians.compute_3D_filter(
-                            cameras=scene.getTrainCameras_warn_up(
-                                iteration, args.warn_until_iter, scale=1.0, scale2=2.0
-                            ).copy()
-                        )
-
-            if iteration == (args.simp_iteration2+opt.iterations)//2:
-                gaussians.init_culling(len(scene.getTrainCameras()))
+                if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
+                    gaussians.reset_opacity()
 
             # ---Reset mesh state if Gaussians have changed---
             if mesh_kick_on and gaussians_have_changed:
@@ -455,7 +349,7 @@ def training(
                 or (iteration % args.update_mip_filter_every == 0)
             ):
                 if iteration < opt.iterations - args.update_mip_filter_every:
-                    gaussians.compute_3D_filter(cameras=scene.getTrainCameras_warn_up(iteration, args.warn_until_iter, scale=1.0, scale2=2.0).copy())
+                    gaussians.compute_3D_filter(cameras=scene.getTrainCameras().copy())
                 else:
                     print(f"[INFO] Skipping 3D Mip Filter update at iteration {iteration}")
 
@@ -533,7 +427,7 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[8000])
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[19_999])
     parser.add_argument("--start_checkpoint", type=str, default = None)
     
     # ----- Rasterization technique -----
@@ -541,38 +435,27 @@ if __name__ == "__main__":
     
     # ----- Mesh-In-the-Loop Regularization -----
     parser.add_argument("--no_mesh_regularization", action="store_true")
-    parser.add_argument("--mesh_config", type=str, default="default")
+    parser.add_argument("--mesh_config", type=str, default="default_regular_densification")
     # Gaussians management
     parser.add_argument("--dense_gaussians", action="store_true")
     parser.add_argument("--detach_gaussian_rendering", action="store_true")
 
-    # ----- Densification and Simplification -----
+    # ----- Simplification -----
     # > Inspired by Mini-Splatting2.
-    # > Used for pruning, densification and Gaussian pivots selection.
+    # > Used Gaussian pivots selection.
     parser.add_argument("--imp_metric", required=True, type=str, choices=["outdoor", "indoor"])
-    parser.add_argument("--config_path", type=str, default="./configs/fast")
-    # Aggressive Cloning
-    parser.add_argument("--aggressive_clone_from_iter", type=int, default = 500)
-    parser.add_argument("--aggressive_clone_interval", type=int, default = 250)
-    # Depth Reinitialization
-    parser.add_argument("--warn_until_iter", type=int, default = 3_000)
-    parser.add_argument("--depth_reinit_iter", type=int, default=2_000)
-    parser.add_argument("--num_depth_factor", type=float, default=1)
-    # Simplification
-    parser.add_argument("--simp_iteration1", type=int, default = 3_000)
-    parser.add_argument("--simp_iteration2", type=int, default = 8_000)
-    parser.add_argument("--sampling_factor", type=float, default = 0.6)
+    parser.add_argument("--warn_until_iter", type=int, default=3000)
     
     # ----- Depth-Normal consistency Regularization -----
     # > Inspired by 2DGS, GOF, RaDe-GS...
-    parser.add_argument("--regularization_from_iter", type=int, default = 3_000)
+    parser.add_argument("--regularization_from_iter", type=int, default = 15_000)
     parser.add_argument("--lambda_depth_normal", type=float, default = 0.05)
     
     # ----- Depth Order Regularization (Learned Prior) -----
     # > This loss relies on Depth-AnythingV2, and is not used in MILo paper.
     # > In the paper, MILo does not rely on any learned prior.
     parser.add_argument("--depth_order", action="store_true")
-    parser.add_argument("--depth_order_config", type=str, default="default")
+    parser.add_argument("--depth_order_config", type=str, default="default_regular_densification")
 
     # ----- 3D Mip Filter -----
     # > Inspired by Mip-Splatting.
@@ -590,7 +473,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args(sys.argv[1:])
 
-    args = read_config(parser)
     args.save_iterations.append(args.iterations)
     if not -1 in args.test_iterations:
         args.test_iterations.append(args.iterations)

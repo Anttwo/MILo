@@ -11,7 +11,7 @@ if __name__ == '__main__':
     
     # Install torch
     print(f"[INFO] Installing torch...")
-    os.system(f"conda install -y pytorch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 pytorch-cuda={args.cuda_version} -c pytorch -c nvidia")
+    os.system(f"conda install -y pytorch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 pytorch-cuda={args.cuda_version} mkl=2023.1.0 -c pytorch -c nvidia")
     print(f"[INFO] Torch installed.")
     
     # Install requirements

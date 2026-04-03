@@ -39,6 +39,7 @@ def extract_mesh(
     scale_pivots_with_downsample_ratio:bool=True,
     scale_pivots_factor:Union[float, None]=None,
     override_pivots:Union[torch.Tensor, None]=None,
+    override_pivots_scale:Union[torch.Tensor, None]=None,
     filter_large_edges:bool=True,
     collapse_large_edges:bool=False,
 ) -> Meshes:
@@ -58,6 +59,7 @@ def extract_mesh(
         scale_pivots_with_downsample_ratio (bool, optional): If True, the scale of the pivots will be adjusted to match the downsample ratio. Defaults to True.
         scale_pivots_factor (Union[float, None], optional): If provided, the scale of the pivots will be multiplied by this factor. Defaults to None.
         override_pivots (Union[torch.Tensor, None], optional): Override pivots. Shape: (N_pivots, 3). Defaults to None.
+        override_pivots_scale (Union[torch.Tensor, None], optional): Override pivots scale. Shape: (N_pivots, 1). Defaults to None.
         filter_large_edges (bool, optional): If True, filter out large edges. Defaults to True.
         collapse_large_edges (bool, optional): If True, collapse large edges onto the pivot with the smallest SDF value. Defaults to False.
 
@@ -68,7 +70,7 @@ def extract_mesh(
         (
             (means is not None) and (scales is not None) and (rotations is not None)
         ) or (
-            override_pivots is not None
+            (override_pivots is not None) and (override_pivots_scale is not None)
         )
     )
     
@@ -85,7 +87,7 @@ def extract_mesh(
         )
     else:
         pivots = override_pivots
-
+        pivots_scale = override_pivots_scale
 
     # --- Marching Tetrahedra ---
     verts_list, scale_list, faces_list, _ = marching_tetrahedra(
