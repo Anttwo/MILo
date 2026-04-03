@@ -40,8 +40,6 @@ _Our method introduces a novel differentiable mesh extraction framework that ope
 
 - ⬛ Implement a simple training viewer using the <a href="https://github.com/graphdeco-inria/graphdecoviewer">GraphDeco viewer</a>.
 - ⬛ Add the mesh-based rendering evaluation scripts in `./milo/eval/mesh_nvs`.
-- ✅ Add DTU training and evaluation scripts.
-- ✅ Add low-res and very-low-res training for light output meshes (under 50MB and under 20MB).
 - ✅ Add T&T evaluation scripts in `./milo/eval/tnt/`.
 - ✅ Add Blender add-on (for mesh-based editing and animation) to the repo.
 - ✅ Clean code.
@@ -656,7 +654,7 @@ After training MILo on a scene with test/train split by using the argument `--ev
 python render.py \
     -m <path to pre-trained model> \
     -s <path to dataset> \
-    -- rasterizer <"radegs" or "gof">
+    --rasterizer <"radegs" or "gof">
 
 python metrics.py -m <path to trained model> # Compute error metrics on renderings
 ```
@@ -690,6 +688,20 @@ You can also run the following scripts for evaluating on the full DTU dataset:
 ```bash
 python scripts/evaluate_dtu.py --data_dir <PATH TO DIRECTORY CONTAINING DTU COLMAP SCENES> --gt_dir <PATH TO GT DTU DATA> --rasterizer radegs --log_interval 200
 ```
+
+### Mesh-Based Novel View Synthesis
+
+Our paper introduces a novel **Mesh-Based Novel View Synthesis** evaluation that enables quantitative assessment on datasets where only images are available. After training MILo on a scene with test/train split using the `--eval` argument and extracting a mesh (PLY file), you can evaluate the performance of this new evaluation method by running the scripts below:
+
+```bash
+python eval/mesh_nvs/render_mesh_nvs.py \
+    -s <path to dataset> \
+    --plyfile <folder containing PLY file>/recon.ply
+
+python metrics.py -m <folder containing PLY file>/mesh_nvs # Compute error metrics on renderings
+```
+
+The `eval/mesh_nvs/render_mesh_nvs.py` script trains a color field as described in our paper and uses it to create a set of test renders which are then evaluated by the same `metrics.py` script as above.
 
 </details>
 
